@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>People of Earth — 2000–2100</title>
+<style>
+  body { margin: 0; background: #000; color: #fff; font-family: 'Segoe UI', system-ui, sans-serif; overflow: hidden; }
+  #globeViz { width: 100vw; height: 100vh; }
+
+  .overlay { position: fixed; z-index: 10; pointer-events: none; }
+  .overlay > * { pointer-events: auto; }
+
+  .title-bar { top: 20px; left: 0; right: 0; text-align: center; }
+  .title-bar h1 { font-size: 1.2rem; font-weight: 300; letter-spacing: 0.3em; text-transform: uppercase; opacity: 0.6; }
+
+  .year-display { top: 50%; right: 40px; transform: translateY(-50%); text-align: right; }
+  .year-display .year { font-size: 5rem; font-weight: 100; line-height: 1; opacity: 0.8; font-variant-numeric: tabular-nums; }
+  .year-display .world-pop { font-size: 1rem; font-weight: 300; opacity: 0.5; margin-top: 8px; }
+
+  .controls {
+    position: fixed; bottom: 40px; left: 50%; transform: translateX(-50%); z-index: 10;
+    display: flex; align-items: center; gap: 16px;
+    background: rgba(255,255,255,0.05); backdrop-filter: blur(10px);
+    border: 1px solid rgba(255,255,255,0.1); border-radius: 40px; padding: 12px 24px;
+  }
+  .play-btn {
+    background: none; border: 1px solid rgba(255,255,255,0.3); color: #fff;
+    width: 36px; height: 36px; border-radius: 50%; cursor: pointer;
+    display: flex; align-items: center; justify-content: center; font-size: 14px;
+  }
+  .play-btn:hover { border-color: rgba(255,255,255,0.7); }
+  .slider-container { display: flex; align-items: center; gap: 10px; }
+  .slider-container label { font-size: 0.75rem; opacity: 0.4; font-variant-numeric: tabular-nums; }
+  input[type="range"] {
+    -webkit-appearance: none; width: 300px; height: 3px;
+    background: rgba(255,255,255,0.15); border-radius: 2px; outline: none;
+  }
+  input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none; width: 14px; height: 14px; border-radius: 50%; background: #fff; cursor: pointer;
+  }
+  .speed-btn {
+    background: none; border: none; color: rgba(255,255,255,0.4);
+    font-size: 0.75rem; cursor: pointer; padding: 4px 8px;
+  }
+  .speed-btn:hover, .speed-btn.active { color: #fff; }
+
+  .loading {
+    position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
+    background: #000; z-index: 100; transition: opacity 0.5s;
+  }
+  .loading.hidden { opacity: 0; pointer-events: none; }
+  .loading-text { font-size: 1rem; font-weight: 300; letter-spacing: 0.2em; opacity: 0.5; }
+</style>
+<script src="//cdn.jsdelivr.net/npm/globe.gl"></script>
+<script src="//cdn.jsdelivr.net/npm/three/build/three.min.js"></script>
+</head>
+<body>
+
+<div class="loading" id="loading">
+  <div class="loading-text">Loading population data...</div>
+</div>
+
+<div id="globeViz"></div>
+
+<div class="overlay title-bar">
+  <h1>People of Earth</h1>
+</div>
+
+<div class="overlay year-display">
+  <div class="year" id="year-label">2025</div>
+  <div class="world-pop" id="world-pop-label"></div>
+</div>
+
+<div class="controls">
+  <button class="play-btn" id="play-btn" title="Play / Pause">&#9654;</button>
+  <div class="slider-container">
+    <label>2000</label>
+    <input type="range" id="year-slider" min="2000" max="2100" value="2025" step="1">
+    <label>2100</label>
+  </div>
+  <button class="speed-btn active" data-speed="1">1x</button>
+  <button class="speed-btn" data-speed="3">3x</button>
+  <button class="speed-btn" data-speed="10">10x</button>
+</div>
+
+<script type="module">
+
+// ── State ──
+let popData = {};
+let currentYear = 2025;
+let playing = false;
+let speed = 1;
+let lastTick = 0;
+const TICK_INTERVAL = 300;
+
+// ── Load data ──
+const res = await fetch('./population_data.json');
+popData = await res.json();
+
+// ── Create glow texture ──
+function createGlowTexture() {
+  const size = 128;
+  const canvas = document.createElement('canvas');
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext('2d');
+
+  const gradient = ctx.createRadialGradient(size/2, size/2, 0, size/2, size/2, size/2);
+  gradient.addColorStop(0, 'rgba(255, 220, 120, 1.0)');
+  gradient.addColorStop(0.15, 'rgba(255, 190, 80, 0.8)');
+  gradient.addColorStop(0.4, 'rgba(255, 150, 50, 0.3)');
+  gradient.addColorStop(0.7, 'rgba(255, 120, 30, 0.08)');
+  gradient.addColorStop(1, 'rgba(255, 100, 20, 0)');
+
+  ctx.fillStyle = gradient;
+  ctx.fillRect(0, 0, size, size);
+
+  const texture = new THREE.CanvasTexture(canvas);
+  return texture;
+}
+
+const glowTexture = createGlowTexture();
+
+// Population → visual radius
+// sqrt scale so large countries don't dominate too much
+const MAX_POP = 1.5e9; // ~China/India peak
+function popToRadius(pop) {
+  return Math.sqrt(pop / MAX_POP) * 6 + 0.3;
+}
+
+// ── Globe setup ──
+const world = new Globe(document.getElementById('globeViz'))
+  .globeImageUrl('//cdn.jsdelivr.net/npm/three-globe/example/img/earth-night.jpg')
+  .backgroundImageUrl('//cdn.jsdelivr.net/npm/three-globe/example/img/night-sky.png')
+  .customLayerData([])
+  .customThreeObject(d => {
+    const sprite = new THREE.Sprite(
+      new THREE.SpriteMaterial({
+        map: glowTexture,
+        transparent: true,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+      })
+    );
+    const r = popToRadius(d.pop);
+    sprite.scale.set(r, r, 1);
+    return sprite;
+  })
+  .customThreeObjectUpdate((obj, d) => {
+    const r = popToRadius(d.pop);
+    obj.scale.set(r, r, 1);
+  })
+  .enablePointerInteraction(false)
+  .atmosphereColor('rgba(60, 80, 120, 0.3)')
+  .atmosphereAltitude(0.12);
+
+// Initial view: show Asia
+world.pointOfView({ lat: 20, lng: 100, altitude: 2.2 });
+
+// ── Helpers ──
+function formatPop(n) {
+  if (n >= 1e9) return (n / 1e9).toFixed(2) + ' billion';
+  if (n >= 1e6) return (n / 1e6).toFixed(1) + ' million';
+  return n.toLocaleString();
+}
+
+function updateGlobe(year) {
+  const yearStr = String(Math.round(year));
+  const data = popData[yearStr];
+  if (!data) return;
+
+  world.customLayerData(data);
+
+  document.getElementById('year-label').textContent = yearStr;
+  const worldPop = data.reduce((sum, d) => sum + d.pop, 0);
+  document.getElementById('world-pop-label').textContent = formatPop(worldPop);
+}
+
+// ── Slider ──
+const slider = document.getElementById('year-slider');
+slider.addEventListener('input', () => {
+  currentYear = parseInt(slider.value);
+  updateGlobe(currentYear);
+});
+
+// ── Play / Pause ──
+const playBtn = document.getElementById('play-btn');
+playBtn.addEventListener('click', () => {
+  playing = !playing;
+  playBtn.innerHTML = playing ? '&#9646;&#9646;' : '&#9654;';
+  if (playing) {
+    lastTick = performance.now();
+    requestAnimationFrame(animate);
+  }
+});
+
+function animate() {
+  if (!playing) return;
+  const now = performance.now();
+  if (now - lastTick >= TICK_INTERVAL) {
+    currentYear += speed;
+    if (currentYear > 2100) {
+      currentYear = 2100;
+      playing = false;
+      playBtn.innerHTML = '&#9654;';
+    }
+    slider.value = currentYear;
+    updateGlobe(currentYear);
+    lastTick = now;
+  }
+  requestAnimationFrame(animate);
+}
+
+// ── Speed buttons ──
+document.querySelectorAll('.speed-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.speed-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    speed = parseInt(btn.dataset.speed);
+  });
+});
+
+// ── Initial render ──
+updateGlobe(2025);
+document.getElementById('loading').classList.add('hidden');
+
+</script>
+</body>
+</html>
