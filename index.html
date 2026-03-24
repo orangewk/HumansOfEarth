@@ -84,7 +84,9 @@
 </div>
 
 <div class="controls">
+  <button class="play-btn" id="prev-btn" title="Previous" style="font-size:11px;">&#9664;</button>
   <button class="play-btn" id="play-btn" title="Play / Pause">&#9654;</button>
+  <button class="play-btn" id="next-btn" title="Next" style="font-size:11px;">&#9654;</button>
   <div class="slider-container">
     <label>10000 BC</label>
     <input type="range" id="year-slider" min="0" max="341" value="0" step="1">
@@ -231,13 +233,15 @@
     fetch('city_dots.json').then(function(r) { return r.json(); }),
     fetch('pop_model_data.json').then(function(r) { return r.json(); }),
     fetch('pop_history.json').then(function(r) { return r.json(); }),
-    fetch('timeline.json').then(function(r) { return r.json(); })
+    fetch('timeline.json').then(function(r) { return r.json(); }),
+    fetch('historical_cities.json').then(function(r) { return r.json(); })
   ]).then(function(results) {
     var dots = results[0];
     var modelData = results[1];
     var popHistory = results[2];
     var TIMELINE = results[3];
-    console.log('Data loaded: ' + dots.length + ' dots, ' + TIMELINE.length + ' timeline points');
+    var histCities = results[4];
+    console.log('Data loaded: ' + dots.length + ' dots, ' + TIMELINE.length + ' timeline points, ' + histCities.length + ' historical cities');
 
     // Set slider max to timeline length
     var slider = document.getElementById('year-slider');
@@ -487,21 +491,66 @@
 
     var pointCloud = new THREE.Points(geometry, pointsMaterial);
 
+    // ── Historical city dots (separate point cloud) ──
+    var HC = histCities.length;
+    var hcPositions = new Float32Array(HC * 3);
+    var hcColors = new Float32Array(HC * 3);
+    var hcSizes = new Float32Array(HC);
+    var hcAlphas = new Float32Array(HC);
+
+    for (var i = 0; i < HC; i++) {
+      var hc = histCities[i];
+      var pos = polar2Cartesian(hc.lat, hc.lon, 0.003);
+      hcPositions[i*3] = pos[0];
+      hcPositions[i*3+1] = pos[1];
+      hcPositions[i*3+2] = pos[2];
+      // Fire color default
+      hcColors[i*3] = 1.0;
+      hcColors[i*3+1] = 0.4;
+      hcColors[i*3+2] = 0.05;
+      hcSizes[i] = 2.0;
+      hcAlphas[i] = 0.0; // start hidden
+    }
+
+    var hcGeometry = new THREE.BufferGeometry();
+    hcGeometry.setAttribute('position', new THREE.BufferAttribute(hcPositions, 3));
+    hcGeometry.setAttribute('aColor', new THREE.BufferAttribute(hcColors, 3));
+    hcGeometry.setAttribute('aSize', new THREE.BufferAttribute(hcSizes, 1));
+    hcGeometry.setAttribute('aAlpha', new THREE.BufferAttribute(hcAlphas, 1));
+
+    var hcPointCloud = new THREE.Points(hcGeometry, pointsMaterial); // share material
+
     // Add to ThreeGlobe group for zoom/rotation tracking
-    // Wait a tick for globe to fully initialize
     setTimeout(function() {
       var threeGlobe = findThreeGlobe();
       if (threeGlobe) {
         threeGlobe.add(pointCloud);
-        console.log('Phase 1: Points added to ThreeGlobe group (' + threeGlobe.children.length + ' children)');
+        threeGlobe.add(hcPointCloud);
+        console.log('Points added to ThreeGlobe group');
       } else {
-        // Fallback: add to scene (won't track rotation perfectly)
         world.scene().add(pointCloud);
-        console.log('Phase 1: Fallback - Points added to scene');
+        world.scene().add(hcPointCloud);
+        console.log('Fallback: Points added to scene');
       }
     }, 500);
 
     // ── Phase 2: Year slider ──
+    // Get historical city population for a given year (interpolate between data points)
+    function getHistCityPop(pops, year) {
+      var exact = pops[String(year)];
+      if (exact !== undefined) return exact;
+      // Find bracketing years
+      var years = Object.keys(pops).map(Number).sort(function(a,b){return a-b;});
+      if (year < years[0] || year > years[years.length-1]) return 0;
+      for (var i = 0; i < years.length - 1; i++) {
+        if (years[i] <= year && years[i+1] >= year) {
+          var t = (year - years[i]) / (years[i+1] - years[i]);
+          return pops[String(years[i])] * (1-t) + pops[String(years[i+1])] * t;
+        }
+      }
+      return 0;
+    }
+
     // Age color: warm (young) → cool (elderly)
     // elderlyPct 0.05 → orange, 0.40 → blue-white
     function ageColorShift(origR, origG, origB, elderlyPct) {
@@ -530,16 +579,18 @@
         era = 1;
       }
 
-      // For pre-statistics era (< 1950): normalize ratios so max country = 1.0
-      var useRelative = (year < 1950);
+      // Blend between relative normalization (ancient) and absolute (modern)
+      // era: 0 = fully relative, 1 = fully absolute
 
-      // Cache states per country, apply density weight
+      // Cache states per country, apply density weight only for pre-modern
       var states = {};
       var maxWeightedRatio = 0;
       Object.keys(countryDots).forEach(function(code) {
         var s = getState(code, year);
-        // Apply density weight so each dot represents equal population
-        s.weightedRatio = s.ratio * (countryWeight[code] || 1.0);
+        // Density weight: full in ancient, fade out toward modern
+        var weightStrength = 1.0 - era; // 1.0 ancient, 0.0 modern
+        var w = 1.0 + ((countryWeight[code] || 1.0) - 1.0) * weightStrength;
+        s.weightedRatio = s.ratio * w;
         states[code] = s;
         if (s.weightedRatio > maxWeightedRatio) maxWeightedRatio = s.weightedRatio;
       });
@@ -566,11 +617,15 @@
         }
       }
 
+      // Before 1800: only show historical city dots, hide base (NASA) dots
+      // 1800-1950: fade in base dots
+      var baseDotOpacity = (year < 1800) ? 0.0 : (year < 1950) ? (year - 1800) / 150 : 1.0;
+
       // Update base dots
       for (var i = 0; i < N; i++) {
         var code = dotCountryCode[i];
         if (!code || dotRank[i] < 0) {
-          alphaAttr.array[i] = (year >= 1950) ? 1.0 : 0.0;
+          alphaAttr.array[i] = baseDotOpacity;
           sizeAttr.array[i] = origSizes[i];
           continue;
         }
@@ -578,14 +633,13 @@
         var state = states[code] || { ratio: 1.0, elderlyPct: 0.1, weightedRatio: 1.0 };
         var ratio = state.weightedRatio;
 
-        // Normalize for ancient era
-        if (useRelative && maxWeightedRatio > 0) {
-          ratio = ratio / maxWeightedRatio;
-        }
+        // Blend: relative (ancient) → absolute (modern)
+        var relativeRatio = (maxWeightedRatio > 0) ? ratio / maxWeightedRatio : ratio;
+        ratio = relativeRatio * (1 - era) + ratio * era;
 
         var brightness_factor, size_factor;
-        if (useRelative) {
-          // Ancient: linear scale, no power curve crushing
+        if (era < 0.5) {
+          // Ancient-dominant: linear scale
           brightness_factor = Math.max(0.08, ratio);
           size_factor = 0.5 + ratio * 0.8;
         } else if (ratio < 1) {
@@ -599,8 +653,20 @@
         // Ancient fire: bigger, softer dots
         var sizeMultiplier = 1.0 + (1 - era) * 0.8;
 
-        alphaAttr.array[i] = Math.max(0.05, brightness_factor);
-        sizeAttr.array[i] = origSizes[i] * size_factor * sizeMultiplier;
+        // For decline: also remove dots (dimmest first) when ratio is low
+        var dotVisible = true;
+        if (brightness_factor < 0.5 && dotRank[i] >= 0) {
+          var total = countryDots[code] ? countryDots[code].length : 1;
+          var keepFraction = brightness_factor * 2; // 0.5 → keep all, 0.0 → keep none
+          var keepCount = Math.floor(total * keepFraction);
+          // dotRank is sorted by brightness asc, keep the brightest
+          if (dotRank[i] < (total - keepCount)) {
+            dotVisible = false;
+          }
+        }
+
+        alphaAttr.array[i] = dotVisible ? Math.max(0.05, brightness_factor) : 0.0;
+        sizeAttr.array[i] = dotVisible ? origSizes[i] * size_factor * sizeMultiplier : 0.0;
 
         // Color
         var c = eraColor(i, state.elderlyPct);
@@ -613,7 +679,8 @@
       Object.keys(countryDots).forEach(function(code) {
         var state = states[code] || { ratio: 1.0, elderlyPct: 0.1, weightedRatio: 1.0 };
         var ratio = state.weightedRatio;
-        if (useRelative && maxWeightedRatio > 0) ratio = ratio / maxWeightedRatio;
+        var relRatio = (maxWeightedRatio > 0) ? ratio / maxWeightedRatio : ratio;
+        ratio = relRatio * (1 - era) + ratio * era;
         var nSlots = GROWTH_SLOTS_PER_COUNTRY[code];
         var slotBase = growthSlotStart[code];
 
@@ -642,6 +709,47 @@
       alphaAttr.needsUpdate = true;
       sizeAttr.needsUpdate = true;
       colorAttr.needsUpdate = true;
+
+      // ── Update historical city dots ──
+      var hcAlphaAttr = hcGeometry.getAttribute('aAlpha');
+      var hcSizeAttr = hcGeometry.getAttribute('aSize');
+      var hcColorAttr = hcGeometry.getAttribute('aColor');
+
+      // Find max city pop for this year (for normalization)
+      var maxCityPop = 0;
+      for (var i = 0; i < HC; i++) {
+        var pops = histCities[i].pops;
+        // Find closest year
+        var pop = getHistCityPop(pops, year);
+        if (pop > maxCityPop) maxCityPop = pop;
+      }
+
+      for (var i = 0; i < HC; i++) {
+        var pop = getHistCityPop(histCities[i].pops, year);
+        if (pop > 0 && maxCityPop > 0) {
+          var norm = pop / maxCityPop; // 0..1
+          hcAlphaAttr.array[i] = 0.3 + norm * 0.7;
+          hcSizeAttr.array[i] = 2.0 + norm * 5.0; // bigger for larger cities
+
+          // Color: fire for ancient, transition to warm for modern
+          if (era < 1) {
+            hcColorAttr.array[i*3]   = 1.0;
+            hcColorAttr.array[i*3+1] = 0.25 + norm * 0.3;
+            hcColorAttr.array[i*3+2] = 0.02 + norm * 0.08;
+          } else {
+            hcColorAttr.array[i*3]   = 1.0;
+            hcColorAttr.array[i*3+1] = 0.7 + norm * 0.2;
+            hcColorAttr.array[i*3+2] = 0.4 + norm * 0.3;
+          }
+        } else {
+          hcAlphaAttr.array[i] = 0.0;
+          hcSizeAttr.array[i] = 0.0;
+        }
+      }
+      hcAlphaAttr.needsUpdate = true;
+      hcSizeAttr.needsUpdate = true;
+      hcColorAttr.needsUpdate = true;
+
       document.getElementById('year-label').textContent = formatYear(Math.round(year));
 
       // Grey out scenario buttons for historical years
@@ -665,6 +773,16 @@
       currentYear = TIMELINE[currentIdx];
       updateYear(currentYear);
     });
+
+    function stepBy(delta) {
+      currentIdx = Math.max(0, Math.min(TIMELINE.length - 1, currentIdx + delta));
+      currentYear = TIMELINE[currentIdx];
+      slider.value = currentIdx;
+      updateYear(currentYear);
+    }
+
+    document.getElementById('prev-btn').addEventListener('click', function() { stepBy(-1); });
+    document.getElementById('next-btn').addEventListener('click', function() { stepBy(1); });
 
     var playBtn = document.getElementById('play-btn');
     playBtn.addEventListener('click', function() {
