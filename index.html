@@ -511,7 +511,50 @@
     hcGeometry.setAttribute('aAlpha', new THREE.BufferAttribute(hcAlphas, 1));
     hcGeometry.setDrawRange(0, 0); // start with nothing visible
 
-    var hcPointCloud = new THREE.Points(hcGeometry, pointsMaterial);
+    // Historical dots get a wobble shader to convey imprecision
+    var hcMaterial = new THREE.ShaderMaterial({
+      uniforms: {
+        uTime: { value: 0.0 }
+      },
+      vertexShader: [
+        'uniform float uTime;',
+        'attribute vec3 aColor;',
+        'attribute float aSize;',
+        'attribute float aAlpha;',
+        'varying vec3 vColor;',
+        'varying float vAlpha;',
+        'void main() {',
+        '  vColor = aColor;',
+        '  vAlpha = aAlpha;',
+        '  // Wobble: slow drift unique to each dot',
+        '  float id = position.x * 13.7 + position.y * 7.3 + position.z * 11.1;',
+        '  vec3 wobble = vec3(',
+        '    sin(uTime * 0.4 + id) * 0.15,',
+        '    cos(uTime * 0.3 + id * 1.3) * 0.15,',
+        '    sin(uTime * 0.5 + id * 0.7) * 0.15',
+        '  );',
+        '  vec4 mvPosition = modelViewMatrix * vec4(position + wobble, 1.0);',
+        '  gl_PointSize = clamp(aSize * (200.0 / -mvPosition.z), 1.0, 64.0);',
+        '  gl_Position = projectionMatrix * mvPosition;',
+        '}',
+      ].join('\n'),
+      fragmentShader: [
+        'varying vec3 vColor;',
+        'varying float vAlpha;',
+        'void main() {',
+        '  float d = length(gl_PointCoord - vec2(0.5));',
+        '  if (d > 0.5) discard;',
+        '  float glow = 1.0 - smoothstep(0.0, 0.5, d);',
+        '  glow = glow * glow;',
+        '  gl_FragColor = vec4(vColor * glow, glow * vAlpha);',
+        '}',
+      ].join('\n'),
+      transparent: true,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+    });
+
+    var hcPointCloud = new THREE.Points(hcGeometry, hcMaterial);
 
     // Add to ThreeGlobe group for zoom/rotation tracking
     setTimeout(function() {
@@ -832,6 +875,13 @@
       if (controls) controls.autoRotate = rotating;
       rotateBtn.style.opacity = rotating ? '1' : '0.3';
     });
+
+    // Wobble animation loop
+    function wobbleLoop() {
+      hcMaterial.uniforms.uTime.value = performance.now() / 1000;
+      requestAnimationFrame(wobbleLoop);
+    }
+    wobbleLoop();
 
     // Ready
     updateYear(currentYear);
