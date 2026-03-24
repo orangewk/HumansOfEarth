@@ -86,8 +86,8 @@
 <div class="controls">
   <button class="play-btn" id="play-btn" title="Play / Pause">&#9654;</button>
   <div class="slider-container">
-    <label>2025</label>
-    <input type="range" id="year-slider" min="2025" max="2100" value="2025" step="1">
+    <label>10000 BC</label>
+    <input type="range" id="year-slider" min="0" max="341" value="0" step="1">
     <label>2100</label>
   </div>
   <button class="speed-btn active" data-speed="1">1x</button>
@@ -229,22 +229,84 @@
 
   Promise.all([
     fetch('city_dots.json').then(function(r) { return r.json(); }),
-    fetch('pop_model_data.json').then(function(r) { return r.json(); })
+    fetch('pop_model_data.json').then(function(r) { return r.json(); }),
+    fetch('pop_history.json').then(function(r) { return r.json(); }),
+    fetch('timeline.json').then(function(r) { return r.json(); })
   ]).then(function(results) {
     var dots = results[0];
     var modelData = results[1];
-    console.log('Data loaded: ' + dots.length + ' dots, ' + Object.keys(modelData).length + ' countries');
+    var popHistory = results[2];
+    var TIMELINE = results[3];
+    console.log('Data loaded: ' + dots.length + ' dots, ' + TIMELINE.length + ' timeline points');
+
+    // Set slider max to timeline length
+    var slider = document.getElementById('year-slider');
+    slider.max = TIMELINE.length - 1;
+    // Start at 2025
+    var startIdx = TIMELINE.indexOf(2025);
+    if (startIdx < 0) startIdx = TIMELINE.indexOf(2023);
+    slider.value = startIdx;
+
+    // Year display formatting
+    function formatYear(yr) {
+      if (yr < 0) return Math.abs(yr) + ' BC';
+      if (yr === 0) return '1 AD';
+      return String(yr);
+    }
 
     // Cache computed states (invalidated on scenario change)
     var stateCache = {};
     function getState(code, year) {
       var key = code + '_' + year + '_' + currentScenario;
       if (stateCache[key]) return stateCache[key];
-      var m = modelData[code];
-      if (!m) return { ratio: 1.0, elderlyPct: 0.1 };
-      var s = computeState(m, year, currentScenario);
-      stateCache[key] = s;
-      return s;
+
+      var result;
+      if (year <= 2023) {
+        // Historical: use actual population data
+        var h = popHistory[code];
+        var m = modelData[code];
+        var popBase = m ? m.p : 0;
+        if (!h || !popBase) {
+          result = { ratio: 0, elderlyPct: 0.05 };
+        } else {
+          // Find closest year in history
+          var pop = h[String(year)];
+          if (pop === undefined) {
+            // Interpolate between nearest available years
+            var years = Object.keys(h).map(Number).sort(function(a,b){return a-b;});
+            var lo = years[0], hi = years[years.length-1];
+            for (var i = 0; i < years.length - 1; i++) {
+              if (years[i] <= year && years[i+1] >= year) {
+                lo = years[i]; hi = years[i+1]; break;
+              }
+            }
+            var loP = h[String(lo)] || 0, hiP = h[String(hi)] || 0;
+            var t = (hi === lo) ? 0 : (year - lo) / (hi - lo);
+            pop = loP + (hiP - loP) * t;
+          }
+          var ratio = pop / popBase;
+
+          // Age color: use cohort model for 1950+, warm for before
+          var elderlyPct = 0.05; // default warm
+          if (year >= 1950 && m) {
+            // Reverse cohort: compute from 2023 backward
+            var s = computeState(m, year, 'stable');
+            elderlyPct = s.elderlyPct;
+          }
+          result = { ratio: ratio, elderlyPct: elderlyPct };
+        }
+      } else {
+        // Future: use model
+        var m = modelData[code];
+        if (!m) {
+          result = { ratio: 1.0, elderlyPct: 0.1 };
+        } else {
+          result = computeState(m, year, currentScenario);
+        }
+      }
+
+      stateCache[key] = result;
+      return result;
     }
 
     // Pre-compute per-country dot indices sorted by brightness asc
@@ -435,17 +497,55 @@
       var sizeAttr = geometry.getAttribute('aSize');
       var colorAttr = geometry.getAttribute('aColor');
 
+      // Era transition: 0 = ancient fire, 1 = modern electric
+      // -10000~1800: fire, 1800~1950: transition, 1950+: electric
+      var era;
+      if (year <= 1800) {
+        era = 0;
+      } else if (year <= 1950) {
+        era = (year - 1800) / 150; // 0..1
+      } else {
+        era = 1;
+      }
+
+      // For pre-statistics era (< 1950): normalize ratios so max country = 1.0
+      var useRelative = (year < 1950);
+
       // Cache states per country
       var states = {};
+      var maxRatio = 0;
       Object.keys(countryDots).forEach(function(code) {
         states[code] = getState(code, year);
+        if (states[code].ratio > maxRatio) maxRatio = states[code].ratio;
       });
+
+      // Apply dot color based on era
+      function eraColor(idx, elderlyPct) {
+        var origR = origColors[idx*3];
+        var origG = origColors[idx*3+1];
+        var origB = origColors[idx*3+2];
+
+        if (era < 1) {
+          // Fire color: deep red-orange, desaturated green/blue
+          var fireR = Math.min(1.0, origR * 1.2 + 0.3);
+          var fireG = origR * 0.3;
+          var fireB = origR * 0.05;
+          // Blend fire → electric by era
+          var r = fireR * (1 - era) + origR * era;
+          var g = fireG * (1 - era) + origG * era;
+          var b = fireB * (1 - era) + origB * era;
+          return [r, g, b];
+        } else {
+          // Modern: age color shift
+          return ageColorShift(origR, origG, origB, elderlyPct);
+        }
+      }
 
       // Update base dots
       for (var i = 0; i < N; i++) {
         var code = dotCountryCode[i];
         if (!code || dotRank[i] < 0) {
-          alphaAttr.array[i] = 1.0;
+          alphaAttr.array[i] = (year >= 1950) ? 1.0 : 0.0;
           sizeAttr.array[i] = origSizes[i];
           continue;
         }
@@ -453,8 +553,17 @@
         var state = states[code] || { ratio: 1.0, elderlyPct: 0.1 };
         var ratio = state.ratio;
 
+        // Normalize for ancient era
+        if (useRelative && maxRatio > 0) {
+          ratio = ratio / maxRatio;
+        }
+
         var brightness_factor, size_factor;
-        if (ratio < 1) {
+        if (useRelative) {
+          // Ancient: linear scale, no power curve crushing
+          brightness_factor = Math.max(0.08, ratio);
+          size_factor = 0.5 + ratio * 0.8;
+        } else if (ratio < 1) {
           brightness_factor = Math.pow(ratio, 1.5);
           size_factor = Math.pow(ratio, 1.2);
         } else {
@@ -462,23 +571,25 @@
           size_factor = Math.min(1.8, Math.pow(ratio, 0.4));
         }
 
-        alphaAttr.array[i] = Math.max(0.05, brightness_factor);
-        sizeAttr.array[i] = origSizes[i] * size_factor;
+        // Ancient fire: bigger, softer dots
+        var sizeMultiplier = 1.0 + (1 - era) * 0.8;
 
-        // Age color shift
-        var aged = ageColorShift(
-          origColors[i*3], origColors[i*3+1], origColors[i*3+2],
-          state.elderlyPct
-        );
-        colorAttr.array[i*3]   = aged[0];
-        colorAttr.array[i*3+1] = aged[1];
-        colorAttr.array[i*3+2] = aged[2];
+        alphaAttr.array[i] = Math.max(0.05, brightness_factor);
+        sizeAttr.array[i] = origSizes[i] * size_factor * sizeMultiplier;
+
+        // Color
+        var c = eraColor(i, state.elderlyPct);
+        colorAttr.array[i*3]   = c[0];
+        colorAttr.array[i*3+1] = c[1];
+        colorAttr.array[i*3+2] = c[2];
       }
 
       // Update growth slots
       Object.keys(countryDots).forEach(function(code) {
         var state = states[code] || { ratio: 1.0, elderlyPct: 0.1 };
         var ratio = state.ratio;
+        if (useRelative && maxRatio > 0) ratio = ratio / maxRatio;
+        // Ancient normalized ratio won't exceed 1, so growth slots not needed
         var nSlots = GROWTH_SLOTS_PER_COUNTRY[code];
         var slotBase = growthSlotStart[code];
 
@@ -489,14 +600,10 @@
             var idx = slotBase + s;
             if (s < nShow) {
               alphaAttr.array[idx] = 0.6 + growthFraction * 0.4;
-              // Color shift growth dots too
-              var aged = ageColorShift(
-                origColors[idx*3], origColors[idx*3+1], origColors[idx*3+2],
-                state.elderlyPct
-              );
-              colorAttr.array[idx*3]   = aged[0];
-              colorAttr.array[idx*3+1] = aged[1];
-              colorAttr.array[idx*3+2] = aged[2];
+              var c = eraColor(idx, state.elderlyPct);
+              colorAttr.array[idx*3]   = c[0];
+              colorAttr.array[idx*3+1] = c[1];
+              colorAttr.array[idx*3+2] = c[2];
             } else {
               alphaAttr.array[idx] = 0.0;
             }
@@ -511,19 +618,27 @@
       alphaAttr.needsUpdate = true;
       sizeAttr.needsUpdate = true;
       colorAttr.needsUpdate = true;
-      document.getElementById('year-label').textContent = String(Math.round(year));
+      document.getElementById('year-label').textContent = formatYear(Math.round(year));
+
+      // Grey out scenario buttons for historical years
+      var inFuture = year > 2023;
+      document.querySelectorAll('.scenario-btn').forEach(function(btn) {
+        btn.style.opacity = inFuture ? '' : '0.3';
+        btn.style.pointerEvents = inFuture ? '' : 'none';
+      });
     }
 
     // ── Controls ──
-    var currentYear = 2025;
+    var currentIdx = startIdx;
+    var currentYear = TIMELINE[currentIdx];
     var playing = false;
     var speed = 1;
     var lastTick = 0;
     var TICK_INTERVAL = 300;
 
-    var slider = document.getElementById('year-slider');
     slider.addEventListener('input', function() {
-      currentYear = parseInt(slider.value);
+      currentIdx = parseInt(slider.value);
+      currentYear = TIMELINE[currentIdx];
       updateYear(currentYear);
     });
 
@@ -532,7 +647,7 @@
       playing = !playing;
       playBtn.innerHTML = playing ? '&#9646;&#9646;' : '&#9654;';
       if (playing) {
-        if (currentYear >= 2100) { currentYear = 2025; slider.value = 2025; }
+        if (currentIdx >= TIMELINE.length - 1) { currentIdx = 0; slider.value = 0; }
         lastTick = performance.now();
         requestAnimationFrame(animate);
       }
@@ -542,13 +657,14 @@
       if (!playing) return;
       var now = performance.now();
       if (now - lastTick >= TICK_INTERVAL) {
-        currentYear += speed;
-        if (currentYear > 2100) {
-          currentYear = 2100;
+        currentIdx += speed;
+        if (currentIdx >= TIMELINE.length) {
+          currentIdx = TIMELINE.length - 1;
           playing = false;
           playBtn.innerHTML = '&#9654;';
         }
-        slider.value = currentYear;
+        currentYear = TIMELINE[currentIdx];
+        slider.value = currentIdx;
         updateYear(currentYear);
         lastTick = now;
       }
@@ -587,7 +703,7 @@
     });
 
     // Ready
-    updateYear(2025);
+    updateYear(currentYear);
     document.getElementById('loading').classList.add('hidden');
     console.log('Phase 2: All ready');
 
