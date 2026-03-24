@@ -45,6 +45,16 @@
     font-size: 0.75rem; cursor: pointer; padding: 4px 8px;
   }
   .speed-btn:hover, .speed-btn.active { color: #fff; }
+  .scenario-btn { position: relative; }
+  .scenario-btn::after {
+    content: attr(data-tip);
+    position: absolute; bottom: 130%; left: 50%; transform: translateX(-50%);
+    background: rgba(0,0,0,0.9); border: 1px solid rgba(255,255,255,0.2);
+    border-radius: 6px; padding: 6px 10px; font-size: 0.7rem; white-space: nowrap;
+    color: rgba(255,255,255,0.8); pointer-events: none;
+    opacity: 0; transition: opacity 0.2s;
+  }
+  .scenario-btn:hover::after { opacity: 1; }
 
   .loading {
     position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
@@ -84,9 +94,9 @@
   <button class="speed-btn" data-speed="3">3x</button>
   <button class="speed-btn" data-speed="10">10x</button>
   <span style="opacity:0.2; margin:0 4px;">|</span>
-  <button class="speed-btn scenario-btn active" data-scenario="linear">Linear</button>
-  <button class="speed-btn scenario-btn" data-scenario="stable">Stable</button>
-  <button class="speed-btn scenario-btn" data-scenario="soft">Soft</button>
+  <button class="speed-btn scenario-btn active" data-scenario="linear" data-tip="出生率が現在の下降ペースで低下し続ける（床=0）">Linear</button>
+  <button class="speed-btn scenario-btn" data-scenario="stable" data-tip="出生率が2023年の値で固定（これ以上下がらない）">Stable</button>
+  <button class="speed-btn scenario-btn" data-scenario="soft" data-tip="出生率の低下が緩やかになり 0.8で下げ止まる">Soft</button>
   <span style="opacity:0.2; margin:0 4px;">|</span>
   <button class="play-btn" id="rotate-btn" title="Auto-rotate" style="font-size:11px;">&#x21BB;</button>
 </div>
