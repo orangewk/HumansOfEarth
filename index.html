@@ -320,6 +320,28 @@
       countryDots[code].sort(function(a, b) { return dots[a].brightness - dots[b].brightness; });
     });
 
+    // Dot density weight: normalize so each dot represents roughly equal population
+    // weight > 1 = under-represented (few dots for large pop), < 1 = over-represented
+    var totalPop = 0, totalDotCount = 0;
+    Object.keys(countryDots).forEach(function(code) {
+      var m = modelData[code];
+      if (m) { totalPop += m.p; totalDotCount += countryDots[code].length; }
+    });
+    var globalAvgPPD = totalPop / totalDotCount; // pop per dot global avg
+    var countryWeight = {}; // per-country brightness weight
+    Object.keys(countryDots).forEach(function(code) {
+      var m = modelData[code];
+      if (!m) { countryWeight[code] = 1.0; return; }
+      var ppd = m.p / countryDots[code].length;
+      // weight = sqrt(ppd / globalAvg) — sqrt to avoid extreme values
+      countryWeight[code] = Math.sqrt(ppd / globalAvgPPD);
+    });
+    console.log('Density weights: JPN=' + (countryWeight['JPN']||0).toFixed(2) +
+      ' IND=' + (countryWeight['IND']||0).toFixed(2) +
+      ' NGA=' + (countryWeight['NGA']||0).toFixed(2) +
+      ' CAN=' + (countryWeight['CAN']||0).toFixed(2) +
+      ' FIN=' + (countryWeight['FIN']||0).toFixed(2));
+
     // Per-dot rank within its country
     var N = dots.length;
     var dotRank = new Int32Array(N);
@@ -511,12 +533,15 @@
       // For pre-statistics era (< 1950): normalize ratios so max country = 1.0
       var useRelative = (year < 1950);
 
-      // Cache states per country
+      // Cache states per country, apply density weight
       var states = {};
-      var maxRatio = 0;
+      var maxWeightedRatio = 0;
       Object.keys(countryDots).forEach(function(code) {
-        states[code] = getState(code, year);
-        if (states[code].ratio > maxRatio) maxRatio = states[code].ratio;
+        var s = getState(code, year);
+        // Apply density weight so each dot represents equal population
+        s.weightedRatio = s.ratio * (countryWeight[code] || 1.0);
+        states[code] = s;
+        if (s.weightedRatio > maxWeightedRatio) maxWeightedRatio = s.weightedRatio;
       });
 
       // Apply dot color based on era
@@ -550,12 +575,12 @@
           continue;
         }
 
-        var state = states[code] || { ratio: 1.0, elderlyPct: 0.1 };
-        var ratio = state.ratio;
+        var state = states[code] || { ratio: 1.0, elderlyPct: 0.1, weightedRatio: 1.0 };
+        var ratio = state.weightedRatio;
 
         // Normalize for ancient era
-        if (useRelative && maxRatio > 0) {
-          ratio = ratio / maxRatio;
+        if (useRelative && maxWeightedRatio > 0) {
+          ratio = ratio / maxWeightedRatio;
         }
 
         var brightness_factor, size_factor;
@@ -586,10 +611,9 @@
 
       // Update growth slots
       Object.keys(countryDots).forEach(function(code) {
-        var state = states[code] || { ratio: 1.0, elderlyPct: 0.1 };
-        var ratio = state.ratio;
-        if (useRelative && maxRatio > 0) ratio = ratio / maxRatio;
-        // Ancient normalized ratio won't exceed 1, so growth slots not needed
+        var state = states[code] || { ratio: 1.0, elderlyPct: 0.1, weightedRatio: 1.0 };
+        var ratio = state.weightedRatio;
+        if (useRelative && maxWeightedRatio > 0) ratio = ratio / maxWeightedRatio;
         var nSlots = GROWTH_SLOTS_PER_COUNTRY[code];
         var slotBase = growthSlotStart[code];
 
