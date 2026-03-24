@@ -659,11 +659,7 @@
         ratio = relativeRatio * (1 - era) + ratio * era;
 
         var brightness_factor, size_factor;
-        if (era < 0.5) {
-          // Ancient-dominant: linear scale
-          brightness_factor = Math.max(0.08, ratio);
-          size_factor = 0.5 + ratio * 0.8;
-        } else if (ratio < 1) {
+        if (ratio < 1) {
           brightness_factor = Math.pow(ratio, 1.5);
           size_factor = Math.pow(ratio, 1.2);
         } else {
