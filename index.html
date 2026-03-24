@@ -235,12 +235,23 @@
       }
     });
 
-    // Build geometry
-    var positions = new Float32Array(N * 3);
-    var colors = new Float32Array(N * 3);
-    var sizes = new Float32Array(N);
-    var alphas = new Float32Array(N);
-    var origSizes = new Float32Array(N);
+    // Build geometry with extra capacity for growth dots
+    // Max ratio ~3x (cap), so reserve up to 2x extra slots per country
+    var GROWTH_SLOTS_PER_COUNTRY = {};
+    var totalGrowthSlots = 0;
+    Object.keys(countryDots).forEach(function(code) {
+      var extra = Math.ceil(countryDots[code].length * 2);
+      GROWTH_SLOTS_PER_COUNTRY[code] = extra;
+      totalGrowthSlots += extra;
+    });
+    var TOTAL = N + totalGrowthSlots;
+    console.log('Buffer: ' + N + ' base + ' + totalGrowthSlots + ' growth = ' + TOTAL);
+
+    var positions = new Float32Array(TOTAL * 3);
+    var colors = new Float32Array(TOTAL * 3);
+    var sizes = new Float32Array(TOTAL);
+    var alphas = new Float32Array(TOTAL);
+    var origSizes = new Float32Array(N); // only for base dots
 
     for (var i = 0; i < N; i++) {
       var d = dots[i];
@@ -259,6 +270,53 @@
       origSizes[i] = sz;
       alphas[i] = 1.0;
     }
+    // Growth slots start hidden
+    for (var i = N; i < TOTAL; i++) {
+      alphas[i] = 0.0;
+      sizes[i] = 0.0;
+    }
+
+    // Pre-compute growth slot ranges per country
+    var growthSlotStart = {};
+    var offset = N;
+    Object.keys(countryDots).forEach(function(code) {
+      growthSlotStart[code] = offset;
+      offset += GROWTH_SLOTS_PER_COUNTRY[code];
+    });
+
+    // Pre-generate growth dot positions (near brightest existing dots)
+    // Seeded pseudo-random for consistency
+    var seed = 12345;
+    function pseudoRandom() {
+      seed = (seed * 16807 + 0) % 2147483647;
+      return seed / 2147483647;
+    }
+    Object.keys(countryDots).forEach(function(code) {
+      var indices = countryDots[code];
+      var nSlots = GROWTH_SLOTS_PER_COUNTRY[code];
+      var slotBase = growthSlotStart[code];
+      // Pick from brightest 1/3 as seeds
+      var seedPool = indices.slice(Math.floor(indices.length * 0.67));
+
+      for (var s = 0; s < nSlots; s++) {
+        var seedIdx = seedPool[Math.floor(pseudoRandom() * seedPool.length)];
+        var sd = dots[seedIdx];
+        // Small random offset in lat/lon (0.1-0.5 degrees)
+        var dlat = (pseudoRandom() - 0.5) * 0.8;
+        var dlon = (pseudoRandom() - 0.5) * 0.8;
+        var pos = polar2Cartesian(sd.lat + dlat, sd.lon + dlon, 0.002);
+        var idx = slotBase + s;
+        positions[idx * 3]     = pos[0];
+        positions[idx * 3 + 1] = pos[1];
+        positions[idx * 3 + 2] = pos[2];
+        // Slightly dimmer warm color
+        var b = 0.3 + pseudoRandom() * 0.4;
+        colors[idx * 3]     = Math.min(1.0, b * 1.3);
+        colors[idx * 3 + 1] = b * 0.9;
+        colors[idx * 3 + 2] = b * 0.6;
+        sizes[idx] = 1.0 + pseudoRandom() * 1.5;
+      }
+    });
 
     var geometry = new THREE.BufferGeometry();
     geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
@@ -324,6 +382,7 @@
         ratios[code] = getRatio(code, year);
       });
 
+      // Update base dots
       for (var i = 0; i < N; i++) {
         var code = dotCountryCode[i];
         if (!code || dotRank[i] < 0) {
@@ -334,9 +393,6 @@
 
         var ratio = ratios[code] || 1.0;
 
-        // Exaggerate with power curve
-        // Decline: ratio^1.5 makes it darker faster
-        // Growth: cap at 2x to avoid blowout
         var brightness_factor, size_factor;
         if (ratio < 1) {
           brightness_factor = Math.pow(ratio, 1.5);
@@ -349,6 +405,34 @@
         alphaAttr.array[i] = Math.max(0.05, brightness_factor);
         sizeAttr.array[i] = origSizes[i] * size_factor;
       }
+
+      // Update growth slots: activate proportional to (ratio - 1)
+      Object.keys(countryDots).forEach(function(code) {
+        var ratio = ratios[code] || 1.0;
+        var nSlots = GROWTH_SLOTS_PER_COUNTRY[code];
+        var slotBase = growthSlotStart[code];
+
+        if (ratio > 1) {
+          // How many growth dots to show
+          var growthFraction = Math.min(1.0, (ratio - 1) / 2.0); // 0..1 over ratio 1..3
+          var nShow = Math.floor(nSlots * growthFraction);
+          for (var s = 0; s < nSlots; s++) {
+            var idx = slotBase + s;
+            if (s < nShow) {
+              alphaAttr.array[idx] = 0.6 + growthFraction * 0.4;
+              // size stays as pre-generated
+            } else {
+              alphaAttr.array[idx] = 0.0;
+            }
+          }
+        } else {
+          // Hide all growth slots
+          for (var s = 0; s < nSlots; s++) {
+            alphaAttr.array[slotBase + s] = 0.0;
+          }
+        }
+      });
+
       alphaAttr.needsUpdate = true;
       sizeAttr.needsUpdate = true;
       document.getElementById('year-label').textContent = String(Math.round(year));
