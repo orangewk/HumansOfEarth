@@ -234,14 +234,14 @@
     fetch('pop_model_data.json').then(function(r) { return r.json(); }),
     fetch('pop_history.json').then(function(r) { return r.json(); }),
     fetch('timeline.json').then(function(r) { return r.json(); }),
-    fetch('historical_cities.json').then(function(r) { return r.json(); })
+    fetch('historical_dots.json').then(function(r) { return r.json(); })
   ]).then(function(results) {
     var dots = results[0];
     var modelData = results[1];
     var popHistory = results[2];
     var TIMELINE = results[3];
-    var histCities = results[4];
-    console.log('Data loaded: ' + dots.length + ' dots, ' + TIMELINE.length + ' timeline points, ' + histCities.length + ' historical cities');
+    var histDots = results[4];  // {year_str: [[lat,lon], ...]}
+    console.log('Data loaded: ' + dots.length + ' dots, ' + TIMELINE.length + ' timeline points');
 
     // Set slider max to timeline length
     var slider = document.getElementById('year-slider');
@@ -491,34 +491,27 @@
 
     var pointCloud = new THREE.Points(geometry, pointsMaterial);
 
-    // ── Historical city dots (separate point cloud) ──
-    var HC = histCities.length;
-    var hcPositions = new Float32Array(HC * 3);
-    var hcColors = new Float32Array(HC * 3);
-    var hcSizes = new Float32Array(HC);
-    var hcAlphas = new Float32Array(HC);
+    // ── Historical population dots (1 dot = 50K people) ──
+    // Find max dot count across all years for buffer sizing
+    var HC_MAX = 0;
+    Object.keys(histDots).forEach(function(yr) {
+      if (histDots[yr].length > HC_MAX) HC_MAX = histDots[yr].length;
+    });
+    console.log('Historical dots: max ' + HC_MAX + ' in any year');
 
-    for (var i = 0; i < HC; i++) {
-      var hc = histCities[i];
-      var pos = polar2Cartesian(hc.lat, hc.lon, 0.003);
-      hcPositions[i*3] = pos[0];
-      hcPositions[i*3+1] = pos[1];
-      hcPositions[i*3+2] = pos[2];
-      // Fire color default
-      hcColors[i*3] = 1.0;
-      hcColors[i*3+1] = 0.4;
-      hcColors[i*3+2] = 0.05;
-      hcSizes[i] = 2.0;
-      hcAlphas[i] = 0.0; // start hidden
-    }
+    var hcPositions = new Float32Array(HC_MAX * 3);
+    var hcColors = new Float32Array(HC_MAX * 3);
+    var hcSizes = new Float32Array(HC_MAX);
+    var hcAlphas = new Float32Array(HC_MAX);
 
     var hcGeometry = new THREE.BufferGeometry();
     hcGeometry.setAttribute('position', new THREE.BufferAttribute(hcPositions, 3));
     hcGeometry.setAttribute('aColor', new THREE.BufferAttribute(hcColors, 3));
     hcGeometry.setAttribute('aSize', new THREE.BufferAttribute(hcSizes, 1));
     hcGeometry.setAttribute('aAlpha', new THREE.BufferAttribute(hcAlphas, 1));
+    hcGeometry.setDrawRange(0, 0); // start with nothing visible
 
-    var hcPointCloud = new THREE.Points(hcGeometry, pointsMaterial); // share material
+    var hcPointCloud = new THREE.Points(hcGeometry, pointsMaterial);
 
     // Add to ThreeGlobe group for zoom/rotation tracking
     setTimeout(function() {
@@ -536,21 +529,6 @@
 
     // ── Phase 2: Year slider ──
     // Get historical city population for a given year (interpolate between data points)
-    function getHistCityPop(pops, year) {
-      var exact = pops[String(year)];
-      if (exact !== undefined) return exact;
-      // Find bracketing years
-      var years = Object.keys(pops).map(Number).sort(function(a,b){return a-b;});
-      if (year < years[0] || year > years[years.length-1]) return 0;
-      for (var i = 0; i < years.length - 1; i++) {
-        if (years[i] <= year && years[i+1] >= year) {
-          var t = (year - years[i]) / (years[i+1] - years[i]);
-          return pops[String(years[i])] * (1-t) + pops[String(years[i+1])] * t;
-        }
-      }
-      return 0;
-    }
-
     // Age color: warm (young) → cool (elderly)
     // elderlyPct 0.05 → orange, 0.40 → blue-white
     function ageColorShift(origR, origG, origB, elderlyPct) {
@@ -710,42 +688,53 @@
       sizeAttr.needsUpdate = true;
       colorAttr.needsUpdate = true;
 
-      // ── Update historical city dots ──
+      // ── Update historical population dots (1 dot = 50K people) ──
+      var hcPosAttr = hcGeometry.getAttribute('position');
       var hcAlphaAttr = hcGeometry.getAttribute('aAlpha');
       var hcSizeAttr = hcGeometry.getAttribute('aSize');
       var hcColorAttr = hcGeometry.getAttribute('aColor');
 
-      // Find max city pop for this year (for normalization)
-      var maxCityPop = 0;
-      for (var i = 0; i < HC; i++) {
-        var pops = histCities[i].pops;
-        // Find closest year
-        var pop = getHistCityPop(pops, year);
-        if (pop > maxCityPop) maxCityPop = pop;
-      }
-
-      for (var i = 0; i < HC; i++) {
-        var pop = getHistCityPop(histCities[i].pops, year);
-        if (pop > 0 && maxCityPop > 0) {
-          var norm = pop / maxCityPop; // 0..1
-          hcAlphaAttr.array[i] = 0.4 + Math.sqrt(norm) * 0.6;
-          hcSizeAttr.array[i] = 2.0 + Math.sqrt(norm) * 8.0; // sqrt scaling: big cities much larger
-
-          // Color: fire for ancient, transition to warm for modern
-          if (era < 1) {
-            hcColorAttr.array[i*3]   = 1.0;
-            hcColorAttr.array[i*3+1] = 0.25 + norm * 0.3;
-            hcColorAttr.array[i*3+2] = 0.02 + norm * 0.08;
-          } else {
-            hcColorAttr.array[i*3]   = 1.0;
-            hcColorAttr.array[i*3+1] = 0.7 + norm * 0.2;
-            hcColorAttr.array[i*3+2] = 0.4 + norm * 0.3;
-          }
-        } else {
-          hcAlphaAttr.array[i] = 0.0;
-          hcSizeAttr.array[i] = 0.0;
+      // Find closest year in histDots
+      var hdYears = Object.keys(histDots).map(Number).sort(function(a,b){return a-b;});
+      var hdYear = hdYears[0];
+      for (var j = 0; j < hdYears.length; j++) {
+        if (hdYears[j] >= year) {
+          hdYear = hdYears[j];
+          if (j > 0 && (year - hdYears[j-1]) < (hdYears[j] - year)) hdYear = hdYears[j-1];
+          break;
         }
       }
+      if (year > hdYears[hdYears.length-1]) hdYear = hdYears[hdYears.length-1];
+
+      var yearDots = histDots[String(hdYear)] || [];
+      var nVisible = Math.min(yearDots.length, HC_MAX);
+
+      // Fade out as we approach modern era
+      var hcOpacity = (year < 1800) ? 0.8 : Math.max(0, 0.8 * (1.0 - era));
+
+      for (var i = 0; i < nVisible; i++) {
+        var pos = polar2Cartesian(yearDots[i][0], yearDots[i][1], 0.003);
+        hcPosAttr.array[i*3]   = pos[0];
+        hcPosAttr.array[i*3+1] = pos[1];
+        hcPosAttr.array[i*3+2] = pos[2];
+        hcAlphaAttr.array[i] = hcOpacity;
+        hcSizeAttr.array[i] = 2.5;
+        // Fire color
+        if (era < 1) {
+          hcColorAttr.array[i*3]   = 1.0;
+          hcColorAttr.array[i*3+1] = 0.3;
+          hcColorAttr.array[i*3+2] = 0.05;
+        } else {
+          hcColorAttr.array[i*3]   = 1.0;
+          hcColorAttr.array[i*3+1] = 0.8;
+          hcColorAttr.array[i*3+2] = 0.5;
+        }
+      }
+      for (var i = nVisible; i < HC_MAX; i++) {
+        hcAlphaAttr.array[i] = 0.0;
+      }
+      hcGeometry.setDrawRange(0, nVisible);
+      hcPosAttr.needsUpdate = true;
       hcAlphaAttr.needsUpdate = true;
       hcSizeAttr.needsUpdate = true;
       hcColorAttr.needsUpdate = true;
