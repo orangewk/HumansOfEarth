@@ -9,3 +9,10 @@ extrapolated.json
 owid_pop.csv
 *.csv
 *.gz
+
+# Intermediate/debug images
+step2_*.jpg
+compare_*.jpg
+year_*.jpg
+night_base_*.jpg
+test_*.jpg

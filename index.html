@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>People of Earth — 2000–2100</title>
+<title>People of Earth — 2025–2100</title>
 <style>
   body { margin: 0; background: #000; color: #fff; font-family: 'Segoe UI', system-ui, sans-serif; overflow: hidden; }
   #globeViz { width: 100vw; height: 100vh; }
@@ -16,7 +16,7 @@
 
   .year-display { top: 50%; right: 40px; transform: translateY(-50%); text-align: right; }
   .year-display .year { font-size: 5rem; font-weight: 100; line-height: 1; opacity: 0.8; font-variant-numeric: tabular-nums; }
-  .year-display .world-pop { font-size: 1rem; font-weight: 300; opacity: 0.5; margin-top: 8px; }
+  .year-display .info { font-size: 0.85rem; font-weight: 300; opacity: 0.4; margin-top: 8px; }
 
   .controls {
     position: fixed; bottom: 40px; left: 50%; transform: translateX(-50%); z-index: 10;
@@ -52,13 +52,13 @@
   .loading.hidden { opacity: 0; pointer-events: none; }
   .loading-text { font-size: 1rem; font-weight: 300; letter-spacing: 0.2em; opacity: 0.5; }
 </style>
-<script src="//cdn.jsdelivr.net/npm/globe.gl"></script>
 <script src="//cdn.jsdelivr.net/npm/three/build/three.min.js"></script>
+<script src="//cdn.jsdelivr.net/npm/globe.gl"></script>
 </head>
 <body>
 
 <div class="loading" id="loading">
-  <div class="loading-text">Loading population data...</div>
+  <div class="loading-text">Loading...</div>
 </div>
 
 <div id="globeViz"></div>
@@ -69,14 +69,14 @@
 
 <div class="overlay year-display">
   <div class="year" id="year-label">2025</div>
-  <div class="world-pop" id="world-pop-label"></div>
+  <div class="info">TFR extrapolation — no recovery assumed</div>
 </div>
 
 <div class="controls">
   <button class="play-btn" id="play-btn" title="Play / Pause">&#9654;</button>
   <div class="slider-container">
-    <label>2000</label>
-    <input type="range" id="year-slider" min="2000" max="2100" value="2025" step="1">
+    <label>2025</label>
+    <input type="range" id="year-slider" min="2025" max="2100" value="2025" step="1">
     <label>2100</label>
   </div>
   <button class="speed-btn active" data-speed="1">1x</button>
@@ -84,147 +84,278 @@
   <button class="speed-btn" data-speed="10">10x</button>
 </div>
 
-<script type="module">
+<script>
+(function() {
 
-// ── State ──
-let popData = {};
-let currentYear = 2025;
-let playing = false;
-let speed = 1;
-let lastTick = 0;
-const TICK_INTERVAL = 300;
+  // ── Phase 0: Globe + base texture + auto-rotate ──
+  var world = new Globe(document.getElementById('globeViz'))
+    .globeImageUrl('earth_night_base.jpg')
+    .backgroundImageUrl('//cdn.jsdelivr.net/npm/three-globe/example/img/night-sky.png')
+    .atmosphereColor('rgba(60, 80, 120, 0.3)')
+    .atmosphereAltitude(0.12)
+    .enablePointerInteraction(false);
 
-// ── Load data ──
-const res = await fetch('./population_data.json');
-popData = await res.json();
+  world.pointOfView({ lat: 20, lng: 100, altitude: 2.2 });
 
-// ── Create glow texture ──
-function createGlowTexture() {
-  const size = 128;
-  const canvas = document.createElement('canvas');
-  canvas.width = size;
-  canvas.height = size;
-  const ctx = canvas.getContext('2d');
-
-  const gradient = ctx.createRadialGradient(size/2, size/2, 0, size/2, size/2, size/2);
-  gradient.addColorStop(0, 'rgba(255, 220, 120, 1.0)');
-  gradient.addColorStop(0.15, 'rgba(255, 190, 80, 0.8)');
-  gradient.addColorStop(0.4, 'rgba(255, 150, 50, 0.3)');
-  gradient.addColorStop(0.7, 'rgba(255, 120, 30, 0.08)');
-  gradient.addColorStop(1, 'rgba(255, 100, 20, 0)');
-
-  ctx.fillStyle = gradient;
-  ctx.fillRect(0, 0, size, size);
-
-  const texture = new THREE.CanvasTexture(canvas);
-  return texture;
-}
-
-const glowTexture = createGlowTexture();
-
-// Population → visual radius
-// sqrt scale so large countries don't dominate too much
-const MAX_POP = 1.5e9; // ~China/India peak
-function popToRadius(pop) {
-  return Math.sqrt(pop / MAX_POP) * 6 + 0.3;
-}
-
-// ── Globe setup ──
-const world = new Globe(document.getElementById('globeViz'))
-  .globeImageUrl('//cdn.jsdelivr.net/npm/three-globe/example/img/earth-night.jpg')
-  .backgroundImageUrl('//cdn.jsdelivr.net/npm/three-globe/example/img/night-sky.png')
-  .customLayerData([])
-  .customThreeObject(d => {
-    const sprite = new THREE.Sprite(
-      new THREE.SpriteMaterial({
-        map: glowTexture,
-        transparent: true,
-        blending: THREE.AdditiveBlending,
-        depthWrite: false,
-      })
-    );
-    const r = popToRadius(d.pop);
-    sprite.scale.set(r, r, 1);
-    return sprite;
-  })
-  .customThreeObjectUpdate((obj, d) => {
-    const r = popToRadius(d.pop);
-    obj.scale.set(r, r, 1);
-  })
-  .enablePointerInteraction(false)
-  .atmosphereColor('rgba(60, 80, 120, 0.3)')
-  .atmosphereAltitude(0.12);
-
-// Initial view: show Asia
-world.pointOfView({ lat: 20, lng: 100, altitude: 2.2 });
-
-// ── Helpers ──
-function formatPop(n) {
-  if (n >= 1e9) return (n / 1e9).toFixed(2) + ' billion';
-  if (n >= 1e6) return (n / 1e6).toFixed(1) + ' million';
-  return n.toLocaleString();
-}
-
-function updateGlobe(year) {
-  const yearStr = String(Math.round(year));
-  const data = popData[yearStr];
-  if (!data) return;
-
-  world.customLayerData(data);
-
-  document.getElementById('year-label').textContent = yearStr;
-  const worldPop = data.reduce((sum, d) => sum + d.pop, 0);
-  document.getElementById('world-pop-label').textContent = formatPop(worldPop);
-}
-
-// ── Slider ──
-const slider = document.getElementById('year-slider');
-slider.addEventListener('input', () => {
-  currentYear = parseInt(slider.value);
-  updateGlobe(currentYear);
-});
-
-// ── Play / Pause ──
-const playBtn = document.getElementById('play-btn');
-playBtn.addEventListener('click', () => {
-  playing = !playing;
-  playBtn.innerHTML = playing ? '&#9646;&#9646;' : '&#9654;';
-  if (playing) {
-    lastTick = performance.now();
-    requestAnimationFrame(animate);
+  var controls = world.controls();
+  if (controls) {
+    controls.autoRotate = true;
+    controls.autoRotateSpeed = 0.3;
   }
-});
 
-function animate() {
-  if (!playing) return;
-  const now = performance.now();
-  if (now - lastTick >= TICK_INTERVAL) {
-    currentYear += speed;
-    if (currentYear > 2100) {
-      currentYear = 2100;
-      playing = false;
-      playBtn.innerHTML = '&#9654;';
+  console.log('Phase 0: Globe ready');
+
+  // ── Phase 1: Load dots + render as THREE.Points ──
+  var GLOBE_RADIUS = 100;
+  var DEG2RAD = Math.PI / 180;
+
+  function polar2Cartesian(lat, lng, alt) {
+    var phi = (90 - lat) * DEG2RAD;
+    var theta = (90 - lng) * DEG2RAD;
+    var r = GLOBE_RADIUS * (1 + alt);
+    return [
+      r * Math.sin(phi) * Math.cos(theta),
+      r * Math.cos(phi),
+      r * Math.sin(phi) * Math.sin(theta)
+    ];
+  }
+
+  // Find ThreeGlobe group in scene
+  function findThreeGlobe() {
+    var found = null;
+    world.scene().traverse(function(obj) {
+      // ThreeGlobe extends THREE.Group and has many children (layers)
+      if (!found && obj.type === 'Group' && obj.children.length > 5) {
+        found = obj;
+      }
+    });
+    return found;
+  }
+
+  Promise.all([
+    fetch('city_dots.json').then(function(r) { return r.json(); }),
+    fetch('v1_extrapolated.json').then(function(r) { return r.json(); })
+  ]).then(function(results) {
+    var dots = results[0];
+    var popData = results[1];
+    console.log('Data loaded: ' + dots.length + ' dots');
+
+    // Pre-compute per-country dot indices sorted by brightness asc
+    var countryDots = {};
+    dots.forEach(function(d, i) {
+      if (!d.country) return;
+      if (!countryDots[d.country]) countryDots[d.country] = [];
+      countryDots[d.country].push(i);
+    });
+    Object.keys(countryDots).forEach(function(code) {
+      countryDots[code].sort(function(a, b) { return dots[a].brightness - dots[b].brightness; });
+    });
+
+    // Per-dot rank within its country
+    var N = dots.length;
+    var dotRank = new Int32Array(N);
+    var dotCountryCode = new Array(N);
+    for (var i = 0; i < N; i++) {
+      dotRank[i] = -1;
+      dotCountryCode[i] = dots[i].country || '';
     }
-    slider.value = currentYear;
-    updateGlobe(currentYear);
-    lastTick = now;
-  }
-  requestAnimationFrame(animate);
-}
+    Object.keys(countryDots).forEach(function(code) {
+      var indices = countryDots[code];
+      for (var rank = 0; rank < indices.length; rank++) {
+        dotRank[indices[rank]] = rank;
+      }
+    });
 
-// ── Speed buttons ──
-document.querySelectorAll('.speed-btn').forEach(btn => {
-  btn.addEventListener('click', () => {
-    document.querySelectorAll('.speed-btn').forEach(b => b.classList.remove('active'));
-    btn.classList.add('active');
-    speed = parseInt(btn.dataset.speed);
+    // Build geometry
+    var positions = new Float32Array(N * 3);
+    var colors = new Float32Array(N * 3);
+    var sizes = new Float32Array(N);
+    var alphas = new Float32Array(N);
+    var origSizes = new Float32Array(N);
+
+    for (var i = 0; i < N; i++) {
+      var d = dots[i];
+      var pos = polar2Cartesian(d.lat, d.lon, 0.002);
+      positions[i * 3]     = pos[0];
+      positions[i * 3 + 1] = pos[1];
+      positions[i * 3 + 2] = pos[2];
+
+      // Warm tint
+      colors[i * 3]     = Math.min(1.0, (d.r * 1.3) / 255);
+      colors[i * 3 + 1] = d.g / 255;
+      colors[i * 3 + 2] = (d.b * 0.7) / 255;
+
+      var sz = 1.0 + (d.brightness / 127) * 2.5;
+      sizes[i] = sz;
+      origSizes[i] = sz;
+      alphas[i] = 1.0;
+    }
+
+    var geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    geometry.setAttribute('aColor', new THREE.BufferAttribute(colors, 3));
+    geometry.setAttribute('aSize', new THREE.BufferAttribute(sizes, 1));
+    geometry.setAttribute('aAlpha', new THREE.BufferAttribute(alphas, 1));
+
+    var pointsMaterial = new THREE.ShaderMaterial({
+      vertexShader: [
+        'attribute vec3 aColor;',
+        'attribute float aSize;',
+        'attribute float aAlpha;',
+        'varying vec3 vColor;',
+        'varying float vAlpha;',
+        'void main() {',
+        '  vColor = aColor;',
+        '  vAlpha = aAlpha;',
+        '  vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);',
+        '  gl_PointSize = clamp(aSize * (200.0 / -mvPosition.z), 1.0, 64.0);',
+        '  gl_Position = projectionMatrix * mvPosition;',
+        '}',
+      ].join('\n'),
+      fragmentShader: [
+        'varying vec3 vColor;',
+        'varying float vAlpha;',
+        'void main() {',
+        '  float d = length(gl_PointCoord - vec2(0.5));',
+        '  if (d > 0.5) discard;',
+        '  float glow = 1.0 - smoothstep(0.0, 0.5, d);',
+        '  glow = glow * glow;',
+        '  gl_FragColor = vec4(vColor * glow, glow * vAlpha);',
+        '}',
+      ].join('\n'),
+      transparent: true,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+    });
+
+    var pointCloud = new THREE.Points(geometry, pointsMaterial);
+
+    // Add to ThreeGlobe group for zoom/rotation tracking
+    // Wait a tick for globe to fully initialize
+    setTimeout(function() {
+      var threeGlobe = findThreeGlobe();
+      if (threeGlobe) {
+        threeGlobe.add(pointCloud);
+        console.log('Phase 1: Points added to ThreeGlobe group (' + threeGlobe.children.length + ' children)');
+      } else {
+        // Fallback: add to scene (won't track rotation perfectly)
+        world.scene().add(pointCloud);
+        console.log('Phase 1: Fallback - Points added to scene');
+      }
+    }, 500);
+
+    // ── Phase 2: Year slider ──
+    // Compute ratio per country for given year
+    function getCountryRatio(code, year) {
+      var cp = popData[code];
+      if (!cp) return 1.0;
+      var popBase = cp['2023'] || cp['2024'] || cp['2025'];
+      var popYear = cp[String(year)];
+      if (!popBase || !popYear) return 1.0;
+      return popYear / popBase;
+    }
+
+    function updateYear(year) {
+      var alphaAttr = geometry.getAttribute('aAlpha');
+      var sizeAttr = geometry.getAttribute('aSize');
+      var colorAttr = geometry.getAttribute('aColor');
+
+      // Cache ratios per country
+      var ratios = {};
+      Object.keys(countryDots).forEach(function(code) {
+        ratios[code] = getCountryRatio(code, year);
+      });
+
+      for (var i = 0; i < N; i++) {
+        var code = dotCountryCode[i];
+        if (!code || dotRank[i] < 0) {
+          alphaAttr.array[i] = 1.0;
+          sizeAttr.array[i] = origSizes[i];
+          continue;
+        }
+
+        var ratio = ratios[code] || 1.0;
+
+        // Exaggerate with power curve
+        // Decline: ratio^1.5 makes it darker faster
+        // Growth: cap at 2x to avoid blowout
+        var brightness_factor, size_factor;
+        if (ratio < 1) {
+          brightness_factor = Math.pow(ratio, 1.5);
+          size_factor = Math.pow(ratio, 1.2);
+        } else {
+          brightness_factor = Math.min(2.0, Math.pow(ratio, 0.6));
+          size_factor = Math.min(1.8, Math.pow(ratio, 0.4));
+        }
+
+        alphaAttr.array[i] = Math.max(0.05, brightness_factor);
+        sizeAttr.array[i] = origSizes[i] * size_factor;
+      }
+      alphaAttr.needsUpdate = true;
+      sizeAttr.needsUpdate = true;
+      document.getElementById('year-label').textContent = String(Math.round(year));
+    }
+
+    // ── Controls ──
+    var currentYear = 2025;
+    var playing = false;
+    var speed = 1;
+    var lastTick = 0;
+    var TICK_INTERVAL = 300;
+
+    var slider = document.getElementById('year-slider');
+    slider.addEventListener('input', function() {
+      currentYear = parseInt(slider.value);
+      updateYear(currentYear);
+    });
+
+    var playBtn = document.getElementById('play-btn');
+    playBtn.addEventListener('click', function() {
+      playing = !playing;
+      playBtn.innerHTML = playing ? '&#9646;&#9646;' : '&#9654;';
+      if (playing) {
+        if (currentYear >= 2100) { currentYear = 2025; slider.value = 2025; }
+        lastTick = performance.now();
+        requestAnimationFrame(animate);
+      }
+    });
+
+    function animate() {
+      if (!playing) return;
+      var now = performance.now();
+      if (now - lastTick >= TICK_INTERVAL) {
+        currentYear += speed;
+        if (currentYear > 2100) {
+          currentYear = 2100;
+          playing = false;
+          playBtn.innerHTML = '&#9654;';
+        }
+        slider.value = currentYear;
+        updateYear(currentYear);
+        lastTick = now;
+      }
+      requestAnimationFrame(animate);
+    }
+
+    document.querySelectorAll('.speed-btn').forEach(function(btn) {
+      btn.addEventListener('click', function() {
+        document.querySelectorAll('.speed-btn').forEach(function(b) { b.classList.remove('active'); });
+        btn.classList.add('active');
+        speed = parseInt(btn.dataset.speed);
+      });
+    });
+
+    // Ready
+    updateYear(2025);
+    document.getElementById('loading').classList.add('hidden');
+    console.log('Phase 2: All ready');
+
+  }).catch(function(err) {
+    console.error('Failed to load data:', err);
+    document.querySelector('.loading-text').textContent = 'Error: ' + err.message;
   });
-});
 
-// ── Initial render ──
-updateGlobe(2025);
-document.getElementById('loading').classList.add('hidden');
-
+})();
 </script>
 </body>
 </html>
