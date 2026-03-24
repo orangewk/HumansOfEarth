@@ -20,9 +20,10 @@
 
   .controls {
     position: fixed; bottom: 40px; left: 50%; transform: translateX(-50%); z-index: 10;
-    display: flex; align-items: center; gap: 16px;
+    display: flex; align-items: center; gap: 12px; flex-wrap: wrap; justify-content: center;
     background: rgba(255,255,255,0.05); backdrop-filter: blur(10px);
-    border: 1px solid rgba(255,255,255,0.1); border-radius: 40px; padding: 12px 24px;
+    border: 1px solid rgba(255,255,255,0.1); border-radius: 20px; padding: 10px 20px;
+    max-width: 90vw;
   }
   .play-btn {
     background: none; border: 1px solid rgba(255,255,255,0.3); color: #fff;
@@ -69,7 +70,7 @@
 
 <div class="overlay year-display">
   <div class="year" id="year-label">2025</div>
-  <div class="info">TFR extrapolation — no recovery assumed</div>
+  <div class="info" id="info-label">TFR continues current trend to zero</div>
 </div>
 
 <div class="controls">
@@ -82,6 +83,12 @@
   <button class="speed-btn active" data-speed="1">1x</button>
   <button class="speed-btn" data-speed="3">3x</button>
   <button class="speed-btn" data-speed="10">10x</button>
+  <span style="opacity:0.2; margin:0 4px;">|</span>
+  <button class="speed-btn scenario-btn active" data-scenario="linear">Linear</button>
+  <button class="speed-btn scenario-btn" data-scenario="stable">Stable</button>
+  <button class="speed-btn scenario-btn" data-scenario="soft">Soft</button>
+  <span style="opacity:0.2; margin:0 4px;">|</span>
+  <button class="play-btn" id="rotate-btn" title="Auto-rotate" style="font-size:11px;">&#x21BB;</button>
 </div>
 
 <script>
@@ -132,13 +139,75 @@
     return found;
   }
 
+  // Scenario definitions
+  var SCENARIOS = {
+    linear: { name: 'Linear decline', desc: 'TFR continues current trend to zero' },
+    stable: { name: 'Stable TFR', desc: 'TFR stays at 2023 level' },
+    soft:   { name: 'Soft landing', desc: 'TFR decline slows, floor at 0.8' },
+  };
+  var currentScenario = 'linear';
+
+  // Population model: compute ratio for a country at a given year under a scenario
+  // Uses replacement-rate correction: TFR/2.1 determines what fraction of deaths are "replaced" by births
+  var REPLACEMENT_TFR = 2.1;
+  var POP_CAP_MULT = 3;
+
+  function computeRatio(model, year, scenario) {
+    var pop = model.p;
+    var popBase = model.p;
+    var tfr = model.t;
+    var slope = model.s;
+    var le = model.l;
+    var im = model.i;
+    var popCap = popBase * POP_CAP_MULT;
+
+    for (var yr = 2024; yr <= year; yr++) {
+      // TFR for this year based on scenario
+      var yearTfr;
+      if (scenario === 'stable') {
+        yearTfr = tfr; // fixed at 2023
+      } else if (scenario === 'soft') {
+        // Decline slows, floor at 0.8
+        var elapsed = yr - 2023;
+        yearTfr = tfr + slope * elapsed * Math.exp(-0.03 * elapsed);
+        yearTfr = Math.max(0.8, yearTfr);
+      } else {
+        // linear: continue slope, floor at 0
+        yearTfr = tfr + slope * (yr - 2023);
+        yearTfr = Math.max(0, yearTfr);
+      }
+
+      // Replacement-rate model:
+      // deathRate is base turnover; births replace deaths proportional to TFR/2.1
+      // TFR=2.1 → population stable, TFR<2.1 → decline, TFR>2.1 → growth
+      var deathRate = 1 / le;
+      var fertilityRatio = yearTfr / REPLACEMENT_TFR;
+      var birthRate = deathRate * fertilityRatio * (1 - im);
+      pop = pop * (1 + birthRate - deathRate);
+      pop = Math.max(0, Math.min(pop, popCap));
+    }
+    return pop / popBase;
+  }
+
   Promise.all([
     fetch('city_dots.json').then(function(r) { return r.json(); }),
-    fetch('v1_extrapolated.json').then(function(r) { return r.json(); })
+    fetch('pop_model_data.json').then(function(r) { return r.json(); })
   ]).then(function(results) {
     var dots = results[0];
-    var popData = results[1];
-    console.log('Data loaded: ' + dots.length + ' dots');
+    var modelData = results[1];
+    console.log('Data loaded: ' + dots.length + ' dots, ' + Object.keys(modelData).length + ' countries');
+
+    // Cache computed ratios (invalidated on scenario change)
+    var ratioCache = {};
+    function getRatio(code, year) {
+      var key = code + '_' + year + '_' + currentScenario;
+      if (ratioCache[key] !== undefined) return ratioCache[key];
+      var m = modelData[code];
+      if (!m) return 1.0;
+      var r = computeRatio(m, year, currentScenario);
+      ratioCache[key] = r;
+      return r;
+    }
 
     // Pre-compute per-country dot indices sorted by brightness asc
     var countryDots = {};
@@ -245,25 +314,14 @@
     }, 500);
 
     // ── Phase 2: Year slider ──
-    // Compute ratio per country for given year
-    function getCountryRatio(code, year) {
-      var cp = popData[code];
-      if (!cp) return 1.0;
-      var popBase = cp['2023'] || cp['2024'] || cp['2025'];
-      var popYear = cp[String(year)];
-      if (!popBase || !popYear) return 1.0;
-      return popYear / popBase;
-    }
-
     function updateYear(year) {
       var alphaAttr = geometry.getAttribute('aAlpha');
       var sizeAttr = geometry.getAttribute('aSize');
-      var colorAttr = geometry.getAttribute('aColor');
 
       // Cache ratios per country
       var ratios = {};
       Object.keys(countryDots).forEach(function(code) {
-        ratios[code] = getCountryRatio(code, year);
+        ratios[code] = getRatio(code, year);
       });
 
       for (var i = 0; i < N; i++) {
@@ -337,12 +395,35 @@
       requestAnimationFrame(animate);
     }
 
-    document.querySelectorAll('.speed-btn').forEach(function(btn) {
+    document.querySelectorAll('.speed-btn:not(.scenario-btn)').forEach(function(btn) {
       btn.addEventListener('click', function() {
-        document.querySelectorAll('.speed-btn').forEach(function(b) { b.classList.remove('active'); });
+        document.querySelectorAll('.speed-btn:not(.scenario-btn)').forEach(function(b) { b.classList.remove('active'); });
         btn.classList.add('active');
         speed = parseInt(btn.dataset.speed);
       });
+    });
+
+    // Scenario buttons
+    var infoLabel = document.getElementById('info-label');
+    document.querySelectorAll('.scenario-btn').forEach(function(btn) {
+      btn.addEventListener('click', function() {
+        document.querySelectorAll('.scenario-btn').forEach(function(b) { b.classList.remove('active'); });
+        btn.classList.add('active');
+        currentScenario = btn.dataset.scenario;
+        ratioCache = {}; // invalidate cache
+        infoLabel.textContent = SCENARIOS[currentScenario].desc;
+        updateYear(currentYear);
+      });
+    });
+    infoLabel.textContent = SCENARIOS[currentScenario].desc;
+
+    // Rotate toggle
+    var rotateBtn = document.getElementById('rotate-btn');
+    var rotating = true;
+    rotateBtn.addEventListener('click', function() {
+      rotating = !rotating;
+      if (controls) controls.autoRotate = rotating;
+      rotateBtn.style.opacity = rotating ? '1' : '0.3';
     });
 
     // Ready
