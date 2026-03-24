@@ -16,3 +16,8 @@ compare_*.jpg
 year_*.jpg
 night_base_*.jpg
 test_*.jpg
+
+# Raw data files
+wb_*.json
+age_data.json
+age_meta.json

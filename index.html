@@ -157,46 +157,74 @@
   };
   var currentScenario = 'linear';
 
-  // Population model: compute ratio for a country at a given year under a scenario
-  // Uses replacement-rate correction: TFR/2.1 determines what fraction of deaths are "replaced" by births
+  // Population model with 3-layer age cohort tracking
+  // Returns { ratio, elderlyPct } for a country at a given year
   var REPLACEMENT_TFR = 2.1;
   var POP_CAP_MULT = 3;
+  var YOUNG_YEARS = 15;   // 0-14
+  var WORK_YEARS = 50;    // 15-64
+  var ELDER_START = 65;
 
-  function computeRatio(model, year, scenario) {
-    var pop = model.p;
+  function computeState(model, year, scenario) {
     var popBase = model.p;
-    var tfr = model.t;
+    var tfr0 = model.t;
     var slope = model.s;
     var le = model.l;
     var im = model.i;
     var popCap = popBase * POP_CAP_MULT;
 
+    // Initialize cohorts from 2023 data
+    var young = popBase * (model.y0 || 0.2);
+    var working = popBase * (1 - (model.y0 || 0.2) - (model.e0 || 0.05));
+    var elderly = popBase * (model.e0 || 0.05);
+
     for (var yr = 2024; yr <= year; yr++) {
-      // TFR for this year based on scenario
       var yearTfr;
       if (scenario === 'stable') {
-        yearTfr = tfr; // fixed at 2023
+        yearTfr = tfr0;
       } else if (scenario === 'soft') {
-        // Decline slows, floor at 0.8
         var elapsed = yr - 2023;
-        yearTfr = tfr + slope * elapsed * Math.exp(-0.03 * elapsed);
+        yearTfr = tfr0 + slope * elapsed * Math.exp(-0.03 * elapsed);
         yearTfr = Math.max(0.8, yearTfr);
       } else {
-        // linear: continue slope, floor at 0
-        yearTfr = tfr + slope * (yr - 2023);
+        yearTfr = tfr0 + slope * (yr - 2023);
         yearTfr = Math.max(0, yearTfr);
       }
 
-      // Replacement-rate model:
-      // deathRate is base turnover; births replace deaths proportional to TFR/2.1
-      // TFR=2.1 → population stable, TFR<2.1 → decline, TFR>2.1 → growth
       var deathRate = 1 / le;
       var fertilityRatio = yearTfr / REPLACEMENT_TFR;
-      var birthRate = deathRate * fertilityRatio * (1 - im);
-      pop = pop * (1 + birthRate - deathRate);
-      pop = Math.max(0, Math.min(pop, popCap));
+
+      // Births go to young
+      var births = (working + young * 0.3) * deathRate * fertilityRatio * (1 - im);
+      // Aging transitions (fraction per year)
+      var youngToWork = young / YOUNG_YEARS;
+      var workToElder = working / WORK_YEARS;
+      // Deaths: elderly die faster, young/working at base rate
+      var youngDeaths = young * deathRate * 0.3;
+      var workDeaths = working * deathRate * 0.5;
+      var elderDeaths = elderly * deathRate * 2.5;
+
+      young = young + births - youngToWork - youngDeaths;
+      working = working + youngToWork - workToElder - workDeaths;
+      elderly = elderly + workToElder - elderDeaths;
+
+      young = Math.max(0, young);
+      working = Math.max(0, working);
+      elderly = Math.max(0, elderly);
+
+      var total = young + working + elderly;
+      if (total > popCap) {
+        var scale = popCap / total;
+        young *= scale; working *= scale; elderly *= scale;
+        total = popCap;
+      }
     }
-    return pop / popBase;
+
+    var total = young + working + elderly;
+    return {
+      ratio: total > 0 ? total / popBase : 0,
+      elderlyPct: total > 0 ? elderly / total : 0,
+    };
   }
 
   Promise.all([
@@ -207,16 +235,16 @@
     var modelData = results[1];
     console.log('Data loaded: ' + dots.length + ' dots, ' + Object.keys(modelData).length + ' countries');
 
-    // Cache computed ratios (invalidated on scenario change)
-    var ratioCache = {};
-    function getRatio(code, year) {
+    // Cache computed states (invalidated on scenario change)
+    var stateCache = {};
+    function getState(code, year) {
       var key = code + '_' + year + '_' + currentScenario;
-      if (ratioCache[key] !== undefined) return ratioCache[key];
+      if (stateCache[key]) return stateCache[key];
       var m = modelData[code];
-      if (!m) return 1.0;
-      var r = computeRatio(m, year, currentScenario);
-      ratioCache[key] = r;
-      return r;
+      if (!m) return { ratio: 1.0, elderlyPct: 0.1 };
+      var s = computeState(m, year, currentScenario);
+      stateCache[key] = s;
+      return s;
     }
 
     // Pre-compute per-country dot indices sorted by brightness asc
@@ -262,6 +290,7 @@
     var sizes = new Float32Array(TOTAL);
     var alphas = new Float32Array(TOTAL);
     var origSizes = new Float32Array(N); // only for base dots
+    var origColors = new Float32Array(TOTAL * 3); // for age color blending
 
     for (var i = 0; i < N; i++) {
       var d = dots[i];
@@ -274,6 +303,10 @@
       colors[i * 3]     = Math.min(1.0, (d.r * 1.3) / 255);
       colors[i * 3 + 1] = d.g / 255;
       colors[i * 3 + 2] = (d.b * 0.7) / 255;
+
+      origColors[i * 3]     = colors[i * 3];
+      origColors[i * 3 + 1] = colors[i * 3 + 1];
+      origColors[i * 3 + 2] = colors[i * 3 + 2];
 
       var sz = 1.0 + (d.brightness / 127) * 2.5;
       sizes[i] = sz;
@@ -324,6 +357,9 @@
         colors[idx * 3]     = Math.min(1.0, b * 1.3);
         colors[idx * 3 + 1] = b * 0.9;
         colors[idx * 3 + 2] = b * 0.6;
+        origColors[idx * 3]     = colors[idx * 3];
+        origColors[idx * 3 + 1] = colors[idx * 3 + 1];
+        origColors[idx * 3 + 2] = colors[idx * 3 + 2];
         sizes[idx] = 1.0 + pseudoRandom() * 1.5;
       }
     });
@@ -382,14 +418,27 @@
     }, 500);
 
     // ── Phase 2: Year slider ──
+    // Age color: warm (young) → cool (elderly)
+    // elderlyPct 0.05 → orange, 0.40 → blue-white
+    function ageColorShift(origR, origG, origB, elderlyPct) {
+      // t: 0 = young (warm), 1 = very old (cold)
+      var t = Math.min(1.0, Math.max(0, (elderlyPct - 0.05) / 0.35));
+      // Warm: original warm tint. Cold: shift toward blue-white
+      var r = origR * (1 - t * 0.6);
+      var g = origG * (1 - t * 0.2);
+      var b = origB + (1.0 - origB) * t * 0.7;
+      return [r, g, b];
+    }
+
     function updateYear(year) {
       var alphaAttr = geometry.getAttribute('aAlpha');
       var sizeAttr = geometry.getAttribute('aSize');
+      var colorAttr = geometry.getAttribute('aColor');
 
-      // Cache ratios per country
-      var ratios = {};
+      // Cache states per country
+      var states = {};
       Object.keys(countryDots).forEach(function(code) {
-        ratios[code] = getRatio(code, year);
+        states[code] = getState(code, year);
       });
 
       // Update base dots
@@ -401,7 +450,8 @@
           continue;
         }
 
-        var ratio = ratios[code] || 1.0;
+        var state = states[code] || { ratio: 1.0, elderlyPct: 0.1 };
+        var ratio = state.ratio;
 
         var brightness_factor, size_factor;
         if (ratio < 1) {
@@ -414,29 +464,44 @@
 
         alphaAttr.array[i] = Math.max(0.05, brightness_factor);
         sizeAttr.array[i] = origSizes[i] * size_factor;
+
+        // Age color shift
+        var aged = ageColorShift(
+          origColors[i*3], origColors[i*3+1], origColors[i*3+2],
+          state.elderlyPct
+        );
+        colorAttr.array[i*3]   = aged[0];
+        colorAttr.array[i*3+1] = aged[1];
+        colorAttr.array[i*3+2] = aged[2];
       }
 
-      // Update growth slots: activate proportional to (ratio - 1)
+      // Update growth slots
       Object.keys(countryDots).forEach(function(code) {
-        var ratio = ratios[code] || 1.0;
+        var state = states[code] || { ratio: 1.0, elderlyPct: 0.1 };
+        var ratio = state.ratio;
         var nSlots = GROWTH_SLOTS_PER_COUNTRY[code];
         var slotBase = growthSlotStart[code];
 
         if (ratio > 1) {
-          // How many growth dots to show
-          var growthFraction = Math.min(1.0, (ratio - 1) / 2.0); // 0..1 over ratio 1..3
+          var growthFraction = Math.min(1.0, (ratio - 1) / 2.0);
           var nShow = Math.floor(nSlots * growthFraction);
           for (var s = 0; s < nSlots; s++) {
             var idx = slotBase + s;
             if (s < nShow) {
               alphaAttr.array[idx] = 0.6 + growthFraction * 0.4;
-              // size stays as pre-generated
+              // Color shift growth dots too
+              var aged = ageColorShift(
+                origColors[idx*3], origColors[idx*3+1], origColors[idx*3+2],
+                state.elderlyPct
+              );
+              colorAttr.array[idx*3]   = aged[0];
+              colorAttr.array[idx*3+1] = aged[1];
+              colorAttr.array[idx*3+2] = aged[2];
             } else {
               alphaAttr.array[idx] = 0.0;
             }
           }
         } else {
-          // Hide all growth slots
           for (var s = 0; s < nSlots; s++) {
             alphaAttr.array[slotBase + s] = 0.0;
           }
@@ -445,6 +510,7 @@
 
       alphaAttr.needsUpdate = true;
       sizeAttr.needsUpdate = true;
+      colorAttr.needsUpdate = true;
       document.getElementById('year-label').textContent = String(Math.round(year));
     }
 
@@ -504,7 +570,7 @@
         document.querySelectorAll('.scenario-btn').forEach(function(b) { b.classList.remove('active'); });
         btn.classList.add('active');
         currentScenario = btn.dataset.scenario;
-        ratioCache = {}; // invalidate cache
+        stateCache = {}; // invalidate cache
         infoLabel.textContent = SCENARIOS[currentScenario].desc;
         updateYear(currentYear);
       });
