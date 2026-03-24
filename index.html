@@ -686,7 +686,8 @@
           }
         }
 
-        alphaAttr.array[i] = dotVisible ? Math.max(0.05, brightness_factor) : 0.0;
+        var finalAlpha = dotVisible ? Math.max(0.05, brightness_factor) : 0.0;
+        alphaAttr.array[i] = finalAlpha * baseDotOpacity; // hide in ancient era
         sizeAttr.array[i] = dotVisible ? origSizes[i] * size_factor * sizeMultiplier : 0.0;
 
         // Color
@@ -696,12 +697,10 @@
         colorAttr.array[i*3+2] = c[2];
       }
 
-      // Update growth slots
+      // Update growth slots (only for modern era)
       Object.keys(countryDots).forEach(function(code) {
         var state = states[code] || { ratio: 1.0, elderlyPct: 0.1, weightedRatio: 1.0 };
-        var ratio = state.weightedRatio;
-        var relRatio = (maxWeightedRatio > 0) ? ratio / maxWeightedRatio : ratio;
-        ratio = relRatio * (1 - era) + ratio * era;
+        var ratio = (era >= 1) ? state.weightedRatio : 0; // hide in ancient era
         var nSlots = GROWTH_SLOTS_PER_COUNTRY[code];
         var slotBase = growthSlotStart[code];
 
