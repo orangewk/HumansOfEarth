@@ -728,8 +728,8 @@
         var pop = getHistCityPop(histCities[i].pops, year);
         if (pop > 0 && maxCityPop > 0) {
           var norm = pop / maxCityPop; // 0..1
-          hcAlphaAttr.array[i] = 0.3 + norm * 0.7;
-          hcSizeAttr.array[i] = 2.0 + norm * 5.0; // bigger for larger cities
+          hcAlphaAttr.array[i] = 0.4 + Math.sqrt(norm) * 0.6;
+          hcSizeAttr.array[i] = 2.0 + Math.sqrt(norm) * 8.0; // sqrt scaling: big cities much larger
 
           // Color: fire for ancient, transition to warm for modern
           if (era < 1) {
