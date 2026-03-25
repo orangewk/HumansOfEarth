@@ -62,6 +62,17 @@
   }
   .loading.hidden { opacity: 0; pointer-events: none; }
   .loading-text { font-size: 1rem; font-weight: 300; letter-spacing: 0.2em; opacity: 0.5; }
+
+  .mode-overlay {
+    position: fixed; inset: 0; display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    background: rgba(0,0,0,0.95); z-index: 50;
+    opacity: 0; pointer-events: none;
+    transition: opacity 0.6s;
+  }
+  .mode-overlay.visible { opacity: 1; }
+  .mode-overlay .mode-title { font-size: 1.5rem; font-weight: 200; letter-spacing: 0.3em; opacity: 0.8; }
+  .mode-overlay .mode-desc { font-size: 0.85rem; font-weight: 300; opacity: 0.4; margin-top: 12px; }
 </style>
 <script src="//cdn.jsdelivr.net/npm/three/build/three.min.js"></script>
 <script src="//cdn.jsdelivr.net/npm/globe.gl"></script>
@@ -74,6 +85,11 @@
 
 <div id="globeViz"></div>
 
+<div class="mode-overlay" id="mode-overlay">
+  <div class="mode-title" id="mode-title"></div>
+  <div class="mode-desc" id="mode-desc"></div>
+</div>
+
 <div class="overlay title-bar">
   <h1>People of Earth</h1>
 </div>
@@ -81,6 +97,8 @@
 <div class="overlay year-display">
   <div class="year" id="year-label">2025</div>
   <div class="info" id="info-label">TFR continues current trend to zero</div>
+  <div class="info" id="legend-label" style="margin-top:4px; font-size:0.7rem;"></div>
+  <div class="info" id="world-pop-label" style="font-size:0.9rem; opacity:0.6; margin-top:4px;"></div>
 </div>
 
 <div class="controls">
@@ -638,9 +656,16 @@
         }
       }
 
-      // Before 1800: only show historical city dots, hide base (NASA) dots
-      // 1800-1950: fade in base dots
-      var baseDotOpacity = (year < 1800) ? 0.0 : (year < 1950) ? (year - 1800) / 150 : 1.0;
+      // Clean switch: historical dots OR NASA dots, never both
+      var useHistorical = (year <= 1950);
+      var baseDotOpacity = useHistorical ? 0.0 : 1.0;
+
+      // Detect mode change and show transition overlay
+      var currentMode = useHistorical ? 'historical' : 'modern';
+      if (lastMode !== null && lastMode !== currentMode) {
+        showModeTransition(currentMode, year);
+      }
+      lastMode = currentMode;
 
       // Update base dots
       for (var i = 0; i < N; i++) {
@@ -722,6 +747,21 @@
         }
       });
 
+      // Set draw range to only render base dots + active growth slots
+      var maxActiveIdx = N; // at minimum, draw all base dots
+      Object.keys(countryDots).forEach(function(code) {
+        var nSlots = GROWTH_SLOTS_PER_COUNTRY[code];
+        var slotBase = growthSlotStart[code];
+        for (var s = nSlots - 1; s >= 0; s--) {
+          if (alphaAttr.array[slotBase + s] > 0) {
+            var end = slotBase + s + 1;
+            if (end > maxActiveIdx) maxActiveIdx = end;
+            break;
+          }
+        }
+      });
+      geometry.setDrawRange(0, maxActiveIdx);
+
       alphaAttr.needsUpdate = true;
       sizeAttr.needsUpdate = true;
       colorAttr.needsUpdate = true;
@@ -747,8 +787,8 @@
       var yearDots = histDots[String(hdYear)] || [];
       var nVisible = Math.min(yearDots.length, HC_MAX);
 
-      // Fade out as we approach modern era
-      var hcOpacity = (year < 1800) ? 0.8 : Math.max(0, 0.8 * (1.0 - era));
+      // Clean switch: show historical dots only in historical mode
+      var hcOpacity = useHistorical ? 0.8 : 0.0;
 
       for (var i = 0; i < nVisible; i++) {
         var pos = polar2Cartesian(yearDots[i][0], yearDots[i][1], 0.003);
@@ -779,12 +819,71 @@
 
       document.getElementById('year-label').textContent = formatYear(Math.round(year));
 
+      // Update legend
+      var legendEl = document.getElementById('legend-label');
+      if (useHistorical) {
+        legendEl.textContent = '\u25CF = 50,000 people (estimated placement)';
+      } else {
+        legendEl.textContent = '\u25CF = city light (NASA, brightness \u221D population)';
+      }
+
+      // World population display
+      var worldPop = getWorldPop(year);
+      var wpLabel = document.getElementById('world-pop-label');
+      wpLabel.textContent = worldPop > 0 ? '~' + formatPop(worldPop) : '';
+
       // Grey out scenario buttons for historical years
       var inFuture = year > 2023;
       document.querySelectorAll('.scenario-btn').forEach(function(btn) {
         btn.style.opacity = inFuture ? '' : '0.3';
         btn.style.pointerEvents = inFuture ? '' : 'none';
       });
+    }
+
+    // ── Mode transition ──
+    var lastMode = null; // 'historical' or 'modern'
+    var modeTransitionTimer = null;
+
+    function getWorldPop(year) {
+      var h = popHistory['OWID_WRL'];
+      if (!h) return 0;
+      var p = h[String(year)];
+      if (p) return p;
+      var yrs = Object.keys(h).map(Number).sort(function(a,b){return a-b;});
+      for (var i = 0; i < yrs.length - 1; i++) {
+        if (yrs[i] <= year && yrs[i+1] >= year) {
+          var t = (year - yrs[i]) / (yrs[i+1] - yrs[i]);
+          return h[String(yrs[i])] * (1-t) + h[String(yrs[i+1])] * t;
+        }
+      }
+      return 0;
+    }
+
+    function formatPop(n) {
+      if (n >= 1e9) return (n/1e9).toFixed(1) + ' billion';
+      if (n >= 1e6) return Math.round(n/1e6) + ' million';
+      if (n >= 1e3) return Math.round(n/1e3) + ' thousand';
+      return String(Math.round(n));
+    }
+
+    function showModeTransition(mode, year) {
+      var overlay = document.getElementById('mode-overlay');
+      var title = document.getElementById('mode-title');
+      var desc = document.getElementById('mode-desc');
+      var worldPop = getWorldPop(year);
+      var popStr = worldPop > 0 ? ('World population: ~' + formatPop(worldPop)) : '';
+      if (mode === 'historical') {
+        title.textContent = 'POPULATION MAP';
+        desc.innerHTML = '\u25CF = 50,000 people \u2014 estimated placement' + (popStr ? '<br>' + popStr : '');
+      } else {
+        title.textContent = 'CITY LIGHTS';
+        desc.innerHTML = 'NASA night imagery \u2014 brightness \u221D population change' + (popStr ? '<br>' + popStr : '');
+      }
+      overlay.classList.add('visible');
+      if (modeTransitionTimer) clearTimeout(modeTransitionTimer);
+      modeTransitionTimer = setTimeout(function() {
+        overlay.classList.remove('visible');
+      }, 1800);
     }
 
     // ── Controls ──
