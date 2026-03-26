@@ -31,8 +31,6 @@
     display: flex; align-items: center; justify-content: center; font-size: 14px;
   }
   .play-btn:hover { border-color: rgba(255,255,255,0.7); }
-  .slider-container { display: flex; align-items: center; gap: 10px; }
-  .slider-container label { font-size: 0.75rem; opacity: 0.4; font-variant-numeric: tabular-nums; }
   input[type="range"] {
     -webkit-appearance: none; width: 300px; height: 3px;
     background: rgba(255,255,255,0.15); border-radius: 2px; outline: none;
@@ -55,6 +53,17 @@
     opacity: 0; transition: opacity 0.2s;
   }
   .scenario-btn:hover::after { opacity: 1; }
+
+  .settings-panel {
+    position: fixed; bottom: 100px; right: 20px; z-index: 10;
+    background: rgba(255,255,255,0.05); backdrop-filter: blur(10px);
+    border: 1px solid rgba(255,255,255,0.1); border-radius: 12px;
+    padding: 12px 16px; display: flex; flex-direction: column; gap: 8px;
+    transition: opacity 0.2s;
+  }
+  .settings-panel.hidden { opacity: 0; pointer-events: none; }
+  .settings-group { display: flex; align-items: center; gap: 8px; }
+  .settings-label { font-size: 0.65rem; opacity: 0.4; min-width: 55px; text-align: right; }
 
   .loading {
     position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
@@ -86,25 +95,32 @@
 </div>
 
 <div class="controls">
-  <button class="play-btn" id="prev-btn" title="Previous" style="font-size:11px;">&#9664;</button>
-  <button class="play-btn" id="play-btn" title="Play / Pause">&#9654;</button>
-  <button class="play-btn" id="next-btn" title="Next" style="font-size:11px;">&#9654;</button>
-  <div class="slider-container">
-    <label>10000 BC</label>
-    <input type="range" id="year-slider" min="0" max="100" value="0" step="1">
-    <label>2100</label>
+  <button class="play-btn" id="play-btn" title="Play / Pause (Space)">&#9654;</button>
+  <input type="range" id="year-slider" min="0" max="100" value="0" step="1" style="flex:1; min-width:150px;">
+  <button class="play-btn" id="settings-btn" title="Settings" style="font-size:13px;">&#9881;</button>
+</div>
+
+<div id="settings-panel" class="settings-panel hidden">
+  <div class="settings-group">
+    <span class="settings-label">Speed</span>
+    <button class="speed-btn active" data-speed="1">1x</button>
+    <button class="speed-btn" data-speed="3">3x</button>
+    <button class="speed-btn" data-speed="10">10x</button>
   </div>
-  <button class="speed-btn active" data-speed="1">1x</button>
-  <button class="speed-btn" data-speed="3">3x</button>
-  <button class="speed-btn" data-speed="10">10x</button>
-  <span style="opacity:0.2; margin:0 4px;">|</span>
-  <button class="speed-btn scenario-btn active" data-scenario="linear" data-tip="TFR continues current decline to zero">Linear</button>
-  <button class="speed-btn scenario-btn" data-scenario="stable" data-tip="TFR stays at 2023 level">Stable</button>
-  <button class="speed-btn scenario-btn" data-scenario="soft" data-tip="TFR decline slows, floor at 0.8">Soft</button>
-  <span style="opacity:0.2; margin:0 4px;">|</span>
-  <button class="speed-btn" id="age-btn" data-tip="年齢構成で色分け (elderly→blue)">Age</button>
-  <span style="opacity:0.2; margin:0 4px;">|</span>
-  <button class="play-btn" id="rotate-btn" title="Auto-rotate" style="font-size:11px;">&#x21BB;</button>
+  <div class="settings-group">
+    <span class="settings-label">Scenario</span>
+    <button class="speed-btn scenario-btn active" data-scenario="linear" data-tip="TFR continues current decline to zero">Linear</button>
+    <button class="speed-btn scenario-btn" data-scenario="stable" data-tip="TFR stays at 2023 level">Stable</button>
+    <button class="speed-btn scenario-btn" data-scenario="soft" data-tip="TFR decline slows, floor at 0.8">Soft</button>
+  </div>
+  <div class="settings-group">
+    <span class="settings-label">Display</span>
+    <button class="speed-btn" id="age-btn">Age color</button>
+    <button class="speed-btn" id="rotate-btn">Rotate</button>
+  </div>
+  <div style="margin-top:4px; font-size:0.6rem; opacity:0.3;">
+    ← → step &nbsp; Space play/pause
+  </div>
 </div>
 
 <script>
@@ -444,8 +460,12 @@
       updateYear(currentYear);
     }
 
-    document.getElementById('prev-btn').addEventListener('click', function() { stepBy(-1); });
-    document.getElementById('next-btn').addEventListener('click', function() { stepBy(1); });
+    // Keyboard controls
+    document.addEventListener('keydown', function(e) {
+      if (e.key === 'ArrowLeft') { stepBy(-1); e.preventDefault(); }
+      else if (e.key === 'ArrowRight') { stepBy(1); e.preventDefault(); }
+      else if (e.key === ' ') { playBtn.click(); e.preventDefault(); }
+    });
 
     var playBtn = document.getElementById('play-btn');
     playBtn.addEventListener('click', function() {
@@ -587,23 +607,30 @@
     });
     infoLabel.textContent = SCENARIOS['linear'];
 
+    // Settings panel toggle
+    var settingsPanel = document.getElementById('settings-panel');
+    document.getElementById('settings-btn').addEventListener('click', function() {
+      settingsPanel.classList.toggle('hidden');
+    });
+
     // Age coloring toggle
-    var showAge = false;
+    var showAge = true;
     var ageBtn = document.getElementById('age-btn');
+    ageBtn.style.color = '#fff';
     ageBtn.addEventListener('click', function() {
       showAge = !showAge;
       ageBtn.style.color = showAge ? '#fff' : '';
-      ageBtn.style.borderBottom = showAge ? '2px solid #fff' : '';
       updateYear(currentYear);
     });
 
     // Rotate toggle
     var rotateBtn = document.getElementById('rotate-btn');
     var rotating = true;
+    rotateBtn.style.color = '#fff';
     rotateBtn.addEventListener('click', function() {
       rotating = !rotating;
       if (controls) controls.autoRotate = rotating;
-      rotateBtn.style.opacity = rotating ? '1' : '0.3';
+      rotateBtn.style.color = rotating ? '#fff' : '';
     });
 
     // Wobble animation
