@@ -117,6 +117,7 @@
   <div class="settings-group">
     <span class="settings-label">Display</span>
     <button class="speed-btn" id="age-btn">Age color</button>
+    <button class="speed-btn" id="migration-btn">Migration</button>
   </div>
   <div style="margin-top:4px; font-size:0.6rem; opacity:0.3;" id="shortcuts-label"></div>
   <div class="settings-group" style="margin-top:2px;">
@@ -149,6 +150,7 @@
       rotate: 'Rotate',
       shortcuts: '\u2190 \u2192 step \u00A0 Space play/pause',
       ageLegend: '<span style="color:#ff6600;">\u25CF</span><small> ~5%</small> <span style="color:#ddcc00;">\u25CF</span><small> ~20%</small> <span style="color:#44cc88;">\u25CF</span><small> ~30%</small> <span style="color:#4488dd;">\u25CF</span><small> ~45%</small> <span style="color:#8855cc;">\u25CF</span><small> ~60%</small> <span style="cursor:help;opacity:0.5;" title="Share of population aged 65+">(65+ %)</span>',
+      migration: 'Migration',
       langBtn: 'JA',
     },
     ja: {
@@ -168,6 +170,7 @@
       rotate: '\u56DE\u8EE2',
       shortcuts: '\u2190 \u2192 1\u30B9\u30C6\u30C3\u30D7 \u00A0 Space \u518D\u751F/\u505C\u6B62',
       ageLegend: '<span style="color:#ff6600;">\u25CF</span><small> ~5%</small> <span style="color:#ddcc00;">\u25CF</span><small> ~20%</small> <span style="color:#44cc88;">\u25CF</span><small> ~30%</small> <span style="color:#4488dd;">\u25CF</span><small> ~45%</small> <span style="color:#8855cc;">\u25CF</span><small> ~60%</small> <span style="cursor:help;opacity:0.5;" title="65\u6B73\u4EE5\u4E0A\u4EBA\u53E3\u306E\u5272\u5408">(65+ %)</span>',
+      migration: '移民フロー',
       langBtn: 'EN',
     }
   };
@@ -179,6 +182,7 @@
     el.textContent = [t.speed, t.scenario, t.display][i] || el.textContent;
   });
   document.getElementById('age-btn').textContent = t.ageColor;
+  document.getElementById('migration-btn').textContent = t.migration;
   document.getElementById('rotate-btn').textContent = t.rotate;
   document.querySelectorAll('.scenario-btn').forEach(function(btn) {
     btn.setAttribute('data-tip', t['tip' + btn.dataset.scenario.charAt(0).toUpperCase() + btn.dataset.scenario.slice(1)]);
@@ -241,16 +245,192 @@
     fetch('historical_dots_packed.json').then(function(r) { return r.json(); }),
     fetch('timeline.json').then(function(r) { return r.json(); }),
     fetch('pop_history.json').then(function(r) { return r.json(); }),
-    fetch('pop_model_data.json').then(function(r) { return r.json(); })
+    fetch('pop_model_data.json').then(function(r) { return r.json(); }),
+    fetch('gdp_ssp.json').then(function(r) { return r.json(); }),
+    fetch('lang_groups.json').then(function(r) { return r.json(); }),
+    fetch('countries_coords.csv').then(function(r) { return r.text(); })
   ]).then(function(results) {
     var packedData = results[0]; // {countries: [...], dots: {year: "lat,lon,cidx;..."}}
     var TIMELINE = results[1];
     var popHistory = results[2];
 
     var modelData = results[3];
+    var gdpData = results[4];    // { ISO3: { "2020": val, "2025": val, ... } }
+    var langGroups = results[5]; // { "en": [...], "fr": [...], ... }
+
+    // Parse country coords CSV → { ISO3: { lat, lon } }
+    var countryCoords = {};
+    results[6].split('\n').slice(1).forEach(function(line) {
+      var cols = line.split(',').map(function(c) { return c.trim().replace(/"/g, ''); });
+      if (cols[2] && cols[4] && cols[5]) {
+        countryCoords[cols[2]] = { lat: parseFloat(cols[4]), lon: parseFloat(cols[5]) };
+      }
+    });
 
     var COUNTRY_CODES = packedData.countries; // index → ISO code
     console.log('Countries: ' + COUNTRY_CODES.length);
+
+    // ── Migration engine ──
+    var EMIGRATION_RATE = 0.03;
+    var DISTANCE_DECAY = 1.5;
+    var LANG_BONUS = 3.0;
+    var MIN_DISTANCE_KM = 500;
+
+    // Build language lookup: ISO3 → Set of language codes
+    var countryLangs = {};
+    Object.keys(langGroups).forEach(function(lang) {
+      langGroups[lang].forEach(function(code) {
+        if (!countryLangs[code]) countryLangs[code] = [];
+        countryLangs[code].push(lang);
+      });
+    });
+
+    function shareLang(a, b) {
+      var la = countryLangs[a], lb = countryLangs[b];
+      if (!la || !lb) return false;
+      for (var i = 0; i < la.length; i++) {
+        if (lb.indexOf(la[i]) >= 0) return true;
+      }
+      return false;
+    }
+
+    // Haversine distance in km
+    function haversineKm(lat1, lon1, lat2, lon2) {
+      var R = 6371;
+      var dLat = (lat2 - lat1) * DEG2RAD;
+      var dLon = (lon2 - lon1) * DEG2RAD;
+      var a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+              Math.cos(lat1 * DEG2RAD) * Math.cos(lat2 * DEG2RAD) *
+              Math.sin(dLon / 2) * Math.sin(dLon / 2);
+      return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    }
+
+    // Pre-compute distance matrix for countries in COUNTRY_CODES
+    var distMatrix = {}; // "ISO3a_ISO3b" → km
+    COUNTRY_CODES.forEach(function(a) {
+      var ca = countryCoords[a];
+      if (!ca) return;
+      COUNTRY_CODES.forEach(function(b) {
+        if (a === b) return;
+        var key = a + '_' + b;
+        if (distMatrix[key]) return;
+        var cb = countryCoords[b];
+        if (!cb) return;
+        var d = Math.max(MIN_DISTANCE_KM, haversineKm(ca.lat, ca.lon, cb.lat, cb.lon));
+        distMatrix[key] = d;
+        distMatrix[b + '_' + a] = d;
+      });
+    });
+
+    // Interpolate GDP from 5-year steps
+    function getGdp(code, year) {
+      var g = gdpData[code];
+      if (!g) return 0;
+      var y = Math.max(2020, Math.min(2100, year));
+      var lo = Math.floor(y / 5) * 5;
+      var hi = lo + 5;
+      if (hi > 2100) return g['2100'] || 0;
+      var vLo = g[String(lo)] || 0;
+      var vHi = g[String(hi)] || vLo;
+      return vLo + (vHi - vLo) * (y - lo) / 5;
+    }
+
+    // Pre-compute migration weights per source country (static part: distance + language)
+    // Dynamic part (GDP) changes per year, so we compute full weights at runtime
+    // But we can pre-compute distance^decay and language bonus
+    var migrationTargets = {}; // sourceISO3 → [{ code, distWeight, langBonus }, ...]
+    COUNTRY_CODES.forEach(function(src) {
+      if (!countryCoords[src]) return;
+      var targets = [];
+      COUNTRY_CODES.forEach(function(dst) {
+        if (src === dst) return;
+        var d = distMatrix[src + '_' + dst];
+        if (!d) return;
+        targets.push({
+          code: dst,
+          distWeight: 1 / Math.pow(d, DISTANCE_DECAY),
+          langBonus: shareLang(src, dst) ? LANG_BONUS : 1.0
+        });
+      });
+      migrationTargets[src] = targets;
+    });
+
+    // Main migration-aware population engine
+    // Returns { ISO3: pop } for all countries at the target year
+    var migrationPopCache = {}; // "scenario_year" → { ISO3: pop }
+
+    function computeAllFuturePop(targetYear, scenario) {
+      var cacheKey = scenario + '_' + targetYear;
+      if (migrationPopCache[cacheKey]) return migrationPopCache[cacheKey];
+
+      // Initialize with 2023 populations
+      var pop = {};
+      COUNTRY_CODES.forEach(function(code) {
+        var m = modelData[code];
+        if (m) pop[code] = m.p;
+      });
+
+      for (var yr = 2024; yr <= targetYear; yr++) {
+        // ① Natural growth (same as computeFuturePop)
+        var naturalPop = {};
+        var surplus = {};
+        COUNTRY_CODES.forEach(function(code) {
+          var m = modelData[code];
+          if (!m || !pop[code]) return;
+          var tfr0 = m.t, slope = m.s, le = m.l, im = m.i;
+          var popCap = m.p * 3;
+          var yearTfr;
+          if (scenario === 'stable') yearTfr = tfr0;
+          else if (scenario === 'soft') {
+            var elapsed = yr - 2023;
+            yearTfr = Math.max(0.8, tfr0 + slope * elapsed * Math.exp(-0.03 * elapsed));
+          } else yearTfr = Math.max(0, tfr0 + slope * (yr - 2023));
+          var deathRate = 1 / le;
+          var birthRate = deathRate * (yearTfr / 2.1) * (1 - im);
+          var newPop = pop[code] * (1 + birthRate - deathRate);
+          naturalPop[code] = Math.max(0, Math.min(newPop, popCap));
+          surplus[code] = Math.max(0, naturalPop[code] - pop[code]);
+        });
+
+        // ② Compute emigration and distribute to destinations
+        var immigrants = {};
+        COUNTRY_CODES.forEach(function(code) { immigrants[code] = 0; });
+
+        COUNTRY_CODES.forEach(function(src) {
+          var emig = surplus[src] * EMIGRATION_RATE;
+          if (emig < 1 || !migrationTargets[src]) return;
+
+          // Compute weights with GDP for this year
+          var targets = migrationTargets[src];
+          var totalWeight = 0;
+          var weights = new Array(targets.length);
+          for (var i = 0; i < targets.length; i++) {
+            var dst = targets[i];
+            var gdpPC = pop[dst.code] > 0 ? getGdp(dst.code, yr) * 1e9 / pop[dst.code] : 0;
+            gdpPC = Math.min(gdpPC, 150000); // Cap to prevent small oil-rich states from dominating
+            var w = gdpPC * dst.distWeight * dst.langBonus;
+            weights[i] = w;
+            totalWeight += w;
+          }
+          if (totalWeight <= 0) return;
+
+          // Distribute emigrants proportionally
+          for (var i = 0; i < targets.length; i++) {
+            immigrants[targets[i].code] += emig * (weights[i] / totalWeight);
+          }
+          // Subtract emigrants from source
+          naturalPop[src] = Math.max(0, naturalPop[src] - emig);
+        });
+
+        // ③ Apply immigration
+        COUNTRY_CODES.forEach(function(code) {
+          pop[code] = (naturalPop[code] || 0) + immigrants[code];
+        });
+      }
+
+      migrationPopCache[cacheKey] = pop;
+      return pop;
+    }
 
     // Unpack dots: "lat*10,lon*10,cidx;..." → [[lat, lon, countryIdx], ...]
     var allDots = {};
@@ -487,16 +667,25 @@
         legendEl.textContent = legendBase;
       }
 
-      var worldPop = getWorldPop(year);
+      var worldPop;
+      if (showMigration && year > 2023) {
+        var migPop = computeAllFuturePop(year, currentScenario);
+        worldPop = 0;
+        COUNTRY_CODES.forEach(function(code) { worldPop += migPop[code] || 0; });
+      } else {
+        worldPop = getWorldPop(year);
+      }
       document.getElementById('world-pop-label').textContent =
         worldPop > 0 ? '~' + formatPop(worldPop) : '';
 
-      // Scenario buttons: grey out for past
+      // Scenario & migration buttons: grey out for past
       var inFuture = year > 2023;
       document.querySelectorAll('.scenario-btn').forEach(function(btn) {
         btn.style.opacity = inFuture ? '' : '0.3';
         btn.style.pointerEvents = inFuture ? '' : 'none';
       });
+      migrationBtn.style.opacity = inFuture ? '' : '0.3';
+      migrationBtn.style.pointerEvents = inFuture ? '' : 'none';
     }
 
     // ── Playback controls ──
@@ -609,15 +798,19 @@
       baseDotsPerCountry[cidx].push([d[0], d[1]]);
     });
 
+    var showMigration = false;
+
     function generateFutureDots(year, scenario) {
-      var cacheKey = scenario + '_' + year;
+      var cacheKey = scenario + '_' + (showMigration ? 'mig' : 'nomig') + '_' + year;
       if (futureDotCache[cacheKey]) return futureDotCache[cacheKey];
+
+      var migPop = showMigration ? computeAllFuturePop(year, scenario) : null;
 
       var result = [];
       COUNTRY_CODES.forEach(function(code, cidx) {
         var m = modelData[code];
         if (!m) return;
-        var pop = computeFuturePop(m, year, scenario);
+        var pop = migPop ? (migPop[code] || 0) : computeFuturePop(m, year, scenario);
         var nDots = Math.floor(pop / N_PER_DOT);
         if (nDots < 1) return;
 
@@ -659,7 +852,8 @@
         document.querySelectorAll('.scenario-btn').forEach(function(b) { b.classList.remove('active'); });
         btn.classList.add('active');
         currentScenario = btn.dataset.scenario;
-        futureDotCache = {}; // invalidate
+        futureDotCache = {};
+        migrationPopCache = {};
         infoLabel.textContent = SCENARIOS[currentScenario];
         updateYear(currentYear);
       });
@@ -679,6 +873,15 @@
     ageBtn.addEventListener('click', function() {
       showAge = !showAge;
       ageBtn.style.color = showAge ? '#fff' : '';
+      updateYear(currentYear);
+    });
+
+    // Migration toggle
+    var migrationBtn = document.getElementById('migration-btn');
+    migrationBtn.addEventListener('click', function() {
+      showMigration = !showMigration;
+      migrationBtn.style.color = showMigration ? '#fff' : '';
+      futureDotCache = {};
       updateYear(currentYear);
     });
 
