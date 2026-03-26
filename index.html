@@ -118,13 +118,79 @@
     <button class="speed-btn" id="age-btn">Age color</button>
     <button class="speed-btn" id="rotate-btn">Rotate</button>
   </div>
-  <div style="margin-top:4px; font-size:0.6rem; opacity:0.3;">
-    ← → step &nbsp; Space play/pause
+  <div style="margin-top:4px; font-size:0.6rem; opacity:0.3;" id="shortcuts-label"></div>
+  <div class="settings-group" style="margin-top:2px;">
+    <span class="settings-label">Lang</span>
+    <button class="speed-btn" id="lang-btn"></button>
   </div>
 </div>
 
 <script>
 (function() {
+
+  // ── i18n ──
+  var urlLang = new URLSearchParams(window.location.search).get('lang');
+  var LANG = urlLang || ((navigator.language || '').startsWith('ja') ? 'ja' : 'en');
+  var I18N = {
+    en: {
+      title: 'HUMANS OF EARTH',
+      dotLegend: '\u25CF = 50,000 people',
+      dotLegendAncient: ' (estimated placement)',
+      scenarioLinear: 'TFR continues current trend to zero',
+      scenarioStable: 'TFR stays at 2023 level',
+      scenarioSoft: 'TFR decline slows, floor at 0.8',
+      tipLinear: 'TFR continues current decline to zero',
+      tipStable: 'TFR stays at 2023 level',
+      tipSoft: 'TFR decline slows, floor at 0.8',
+      speed: 'Speed',
+      scenario: 'Scenario',
+      display: 'Display',
+      ageColor: 'Age color',
+      rotate: 'Rotate',
+      shortcuts: '\u2190 \u2192 step \u00A0 Space play/pause',
+      ageLegend: '<span style="color:#ff6600;">\u25CF</span><small> ~5%</small> <span style="color:#ddcc00;">\u25CF</span><small> ~20%</small> <span style="color:#44cc88;">\u25CF</span><small> ~30%</small> <span style="color:#4488dd;">\u25CF</span><small> ~45%</small> <span style="color:#8855cc;">\u25CF</span><small> ~60%</small> <span style="cursor:help;opacity:0.5;" title="Share of population aged 65+">(65+ %)</span>',
+      langBtn: 'JA',
+    },
+    ja: {
+      title: 'HUMANS OF EARTH \uFF5E\u3044\u306E\u3061\u306E\u5149\uFF5E',
+      dotLegend: '\u25CF = 5\u4E07\u4EBA',
+      dotLegendAncient: '\uFF08\u63A8\u5B9A\u914D\u7F6E\uFF09',
+      scenarioLinear: '\u51FA\u751F\u7387\u304C\u73FE\u5728\u306E\u30DA\u30FC\u30B9\u3067\u4F4E\u4E0B\u3057\u7D9A\u3051\u308B',
+      scenarioStable: '\u51FA\u751F\u7387\u304C2023\u5E74\u306E\u5024\u3067\u56FA\u5B9A',
+      scenarioSoft: '\u51FA\u751F\u7387\u306E\u4F4E\u4E0B\u304C\u7DE9\u3084\u304B\u306B\u306A\u308A 0.8\u3067\u4E0B\u3052\u6B62\u307E\u308B',
+      tipLinear: '\u51FA\u751F\u7387\u304C\u73FE\u5728\u306E\u4E0B\u964D\u30DA\u30FC\u30B9\u3067\u7D9A\u304F\uFF08\u5E8A=0\uFF09',
+      tipStable: '\u51FA\u751F\u7387\u304C2023\u5E74\u306E\u5024\u3067\u56FA\u5B9A',
+      tipSoft: '\u51FA\u751F\u7387\u306E\u4F4E\u4E0B\u304C\u7DE9\u3084\u304B\u306B\u306A\u308A 0.8\u3067\u4E0B\u3052\u6B62\u307E\u308B',
+      speed: '\u901F\u5EA6',
+      scenario: '\u30B7\u30CA\u30EA\u30AA',
+      display: '\u8868\u793A',
+      ageColor: '\u5E74\u9F62\u8272',
+      rotate: '\u56DE\u8EE2',
+      shortcuts: '\u2190 \u2192 1\u30B9\u30C6\u30C3\u30D7 \u00A0 Space \u518D\u751F/\u505C\u6B62',
+      ageLegend: '<span style="color:#ff6600;">\u25CF</span><small> ~5%</small> <span style="color:#ddcc00;">\u25CF</span><small> ~20%</small> <span style="color:#44cc88;">\u25CF</span><small> ~30%</small> <span style="color:#4488dd;">\u25CF</span><small> ~45%</small> <span style="color:#8855cc;">\u25CF</span><small> ~60%</small> <span style="cursor:help;opacity:0.5;" title="65\u6B73\u4EE5\u4E0A\u4EBA\u53E3\u306E\u5272\u5408">(65+ %)</span>',
+      langBtn: 'EN',
+    }
+  };
+  var t = I18N[LANG];
+
+  // Apply static text
+  document.querySelector('.title-bar h1').textContent = t.title;
+  document.querySelectorAll('.settings-label').forEach(function(el, i) {
+    el.textContent = [t.speed, t.scenario, t.display][i] || el.textContent;
+  });
+  document.getElementById('age-btn').textContent = t.ageColor;
+  document.getElementById('rotate-btn').textContent = t.rotate;
+  document.querySelectorAll('.scenario-btn').forEach(function(btn) {
+    btn.setAttribute('data-tip', t['tip' + btn.dataset.scenario.charAt(0).toUpperCase() + btn.dataset.scenario.slice(1)]);
+  });
+  document.getElementById('shortcuts-label').textContent = t.shortcuts;
+  document.getElementById('lang-btn').textContent = t.langBtn;
+  document.getElementById('lang-btn').addEventListener('click', function() {
+    var newLang = LANG === 'ja' ? 'en' : 'ja';
+    var url = new URL(window.location);
+    url.searchParams.set('lang', newLang);
+    window.location = url;
+  });
 
   // ── Globe ──
   var world = new Globe(document.getElementById('globeViz'))
@@ -414,15 +480,9 @@
       // UI updates
       document.getElementById('year-label').textContent = formatYear(Math.round(year));
       var legendEl = document.getElementById('legend-label');
-      var legendBase = '\u25CF = 50,000 people' + (ancient ? ' (estimated placement)' : '');
+      var legendBase = t.dotLegend + (ancient ? t.dotLegendAncient : '');
       if (showAge && year >= 1950) {
-        legendEl.innerHTML = legendBase +
-          '<br><span style="color:#ff6600;">\u25CF</span><small> ~5%</small>' +
-          ' <span style="color:#ddcc00;">\u25CF</span><small> ~20%</small>' +
-          ' <span style="color:#44cc88;">\u25CF</span><small> ~30%</small>' +
-          ' <span style="color:#4488dd;">\u25CF</span><small> ~45%</small>' +
-          ' <span style="color:#8855cc;">\u25CF</span><small> ~60%</small>' +
-          ' <span style="cursor:help; opacity:0.5;" title="65\u6B73\u4EE5\u4E0A\u4EBA\u53E3\u306E\u5272\u5408">(65+ %)</span>';
+        legendEl.innerHTML = legendBase + '<br>' + t.ageLegend;
       } else {
         legendEl.textContent = legendBase;
       }
@@ -591,9 +651,9 @@
     // Scenario buttons
     var infoLabel = document.getElementById('info-label');
     var SCENARIOS = {
-      linear: 'TFR continues current trend to zero',
-      stable: 'TFR stays at 2023 level',
-      soft:   'TFR decline slows, floor at 0.8',
+      linear: t.scenarioLinear,
+      stable: t.scenarioStable,
+      soft:   t.scenarioSoft,
     };
     document.querySelectorAll('.scenario-btn').forEach(function(btn) {
       btn.addEventListener('click', function() {
