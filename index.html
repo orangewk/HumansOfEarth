@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>People of Earth — 2025–2100</title>
+<title>People of Earth — 10000 BC–2100 AD</title>
 <style>
   body { margin: 0; background: #000; color: #fff; font-family: 'Segoe UI', system-ui, sans-serif; overflow: hidden; }
   #globeViz { width: 100vw; height: 100vh; }
@@ -62,17 +62,6 @@
   }
   .loading.hidden { opacity: 0; pointer-events: none; }
   .loading-text { font-size: 1rem; font-weight: 300; letter-spacing: 0.2em; opacity: 0.5; }
-
-  .mode-overlay {
-    position: fixed; inset: 0; display: flex; flex-direction: column;
-    align-items: center; justify-content: center;
-    background: rgba(0,0,0,0.95); z-index: 50;
-    opacity: 0; pointer-events: none;
-    transition: opacity 0.6s;
-  }
-  .mode-overlay.visible { opacity: 1; }
-  .mode-overlay .mode-title { font-size: 1.5rem; font-weight: 200; letter-spacing: 0.3em; opacity: 0.8; }
-  .mode-overlay .mode-desc { font-size: 0.85rem; font-weight: 300; opacity: 0.4; margin-top: 12px; }
 </style>
 <script src="//cdn.jsdelivr.net/npm/three/build/three.min.js"></script>
 <script src="//cdn.jsdelivr.net/npm/globe.gl"></script>
@@ -85,18 +74,13 @@
 
 <div id="globeViz"></div>
 
-<div class="mode-overlay" id="mode-overlay">
-  <div class="mode-title" id="mode-title"></div>
-  <div class="mode-desc" id="mode-desc"></div>
-</div>
-
 <div class="overlay title-bar">
   <h1>People of Earth</h1>
 </div>
 
 <div class="overlay year-display">
   <div class="year" id="year-label">2025</div>
-  <div class="info" id="info-label">TFR continues current trend to zero</div>
+  <div class="info" id="info-label"></div>
   <div class="info" id="legend-label" style="margin-top:4px; font-size:0.7rem;"></div>
   <div class="info" id="world-pop-label" style="font-size:0.9rem; opacity:0.6; margin-top:4px;"></div>
 </div>
@@ -107,16 +91,16 @@
   <button class="play-btn" id="next-btn" title="Next" style="font-size:11px;">&#9654;</button>
   <div class="slider-container">
     <label>10000 BC</label>
-    <input type="range" id="year-slider" min="0" max="341" value="0" step="1">
+    <input type="range" id="year-slider" min="0" max="100" value="0" step="1">
     <label>2100</label>
   </div>
   <button class="speed-btn active" data-speed="1">1x</button>
   <button class="speed-btn" data-speed="3">3x</button>
   <button class="speed-btn" data-speed="10">10x</button>
   <span style="opacity:0.2; margin:0 4px;">|</span>
-  <button class="speed-btn scenario-btn active" data-scenario="linear" data-tip="出生率が現在の下降ペースで低下し続ける（床=0）">Linear</button>
-  <button class="speed-btn scenario-btn" data-scenario="stable" data-tip="出生率が2023年の値で固定（これ以上下がらない）">Stable</button>
-  <button class="speed-btn scenario-btn" data-scenario="soft" data-tip="出生率の低下が緩やかになり 0.8で下げ止まる">Soft</button>
+  <button class="speed-btn scenario-btn active" data-scenario="linear" data-tip="TFR continues current decline to zero">Linear</button>
+  <button class="speed-btn scenario-btn" data-scenario="stable" data-tip="TFR stays at 2023 level">Stable</button>
+  <button class="speed-btn scenario-btn" data-scenario="soft" data-tip="TFR decline slows, floor at 0.8">Soft</button>
   <span style="opacity:0.2; margin:0 4px;">|</span>
   <button class="play-btn" id="rotate-btn" title="Auto-rotate" style="font-size:11px;">&#x21BB;</button>
 </div>
@@ -124,7 +108,7 @@
 <script>
 (function() {
 
-  // ── Phase 0: Globe + base texture + auto-rotate ──
+  // ── Globe ──
   var world = new Globe(document.getElementById('globeViz'))
     .globeImageUrl('earth_night_base.jpg')
     .backgroundImageUrl('//cdn.jsdelivr.net/npm/three-globe/example/img/night-sky.png')
@@ -140,9 +124,7 @@
     controls.autoRotateSpeed = 0.3;
   }
 
-  console.log('Phase 0: Globe ready');
-
-  // ── Phase 1: Load dots + render as THREE.Points ──
+  // ── Constants ──
   var GLOBE_RADIUS = 100;
   var DEG2RAD = Math.PI / 180;
 
@@ -157,385 +139,81 @@
     ];
   }
 
-  // Find ThreeGlobe group in scene
-  function findThreeGlobe() {
-    var found = null;
-    world.scene().traverse(function(obj) {
-      // ThreeGlobe extends THREE.Group and has many children (layers)
-      if (!found && obj.type === 'Group' && obj.children.length > 5) {
-        found = obj;
-      }
-    });
-    return found;
+  function formatYear(yr) {
+    if (yr < 0) return Math.abs(yr) + ' BC';
+    if (yr === 0) return '1 AD';
+    return String(yr);
   }
 
-  // Scenario definitions
-  var SCENARIOS = {
-    linear: { name: 'Linear decline', desc: 'TFR continues current trend to zero' },
-    stable: { name: 'Stable TFR', desc: 'TFR stays at 2023 level' },
-    soft:   { name: 'Soft landing', desc: 'TFR decline slows, floor at 0.8' },
-  };
-  var currentScenario = 'linear';
-
-  // Population model with 3-layer age cohort tracking
-  // Returns { ratio, elderlyPct } for a country at a given year
-  var REPLACEMENT_TFR = 2.1;
-  var POP_CAP_MULT = 3;
-  var YOUNG_YEARS = 15;   // 0-14
-  var WORK_YEARS = 50;    // 15-64
-  var ELDER_START = 65;
-
-  function computeState(model, year, scenario) {
-    var popBase = model.p;
-    var tfr0 = model.t;
-    var slope = model.s;
-    var le = model.l;
-    var im = model.i;
-    var popCap = popBase * POP_CAP_MULT;
-
-    // Initialize cohorts from 2023 data
-    var young = popBase * (model.y0 || 0.2);
-    var working = popBase * (1 - (model.y0 || 0.2) - (model.e0 || 0.05));
-    var elderly = popBase * (model.e0 || 0.05);
-
-    for (var yr = 2024; yr <= year; yr++) {
-      var yearTfr;
-      if (scenario === 'stable') {
-        yearTfr = tfr0;
-      } else if (scenario === 'soft') {
-        var elapsed = yr - 2023;
-        yearTfr = tfr0 + slope * elapsed * Math.exp(-0.03 * elapsed);
-        yearTfr = Math.max(0.8, yearTfr);
-      } else {
-        yearTfr = tfr0 + slope * (yr - 2023);
-        yearTfr = Math.max(0, yearTfr);
-      }
-
-      var deathRate = 1 / le;
-      var fertilityRatio = yearTfr / REPLACEMENT_TFR;
-
-      // Births go to young
-      var births = (working + young * 0.3) * deathRate * fertilityRatio * (1 - im);
-      // Aging transitions (fraction per year)
-      var youngToWork = young / YOUNG_YEARS;
-      var workToElder = working / WORK_YEARS;
-      // Deaths: elderly die faster, young/working at base rate
-      var youngDeaths = young * deathRate * 0.3;
-      var workDeaths = working * deathRate * 0.5;
-      var elderDeaths = elderly * deathRate * 2.5;
-
-      young = young + births - youngToWork - youngDeaths;
-      working = working + youngToWork - workToElder - workDeaths;
-      elderly = elderly + workToElder - elderDeaths;
-
-      young = Math.max(0, young);
-      working = Math.max(0, working);
-      elderly = Math.max(0, elderly);
-
-      var total = young + working + elderly;
-      if (total > popCap) {
-        var scale = popCap / total;
-        young *= scale; working *= scale; elderly *= scale;
-        total = popCap;
-      }
-    }
-
-    var total = young + working + elderly;
-    return {
-      ratio: total > 0 ? total / popBase : 0,
-      elderlyPct: total > 0 ? elderly / total : 0,
-    };
+  function formatPop(n) {
+    if (n >= 1e9) return (n/1e9).toFixed(1) + ' billion';
+    if (n >= 1e6) return Math.round(n/1e6) + ' million';
+    if (n >= 1e3) return Math.round(n/1e3) + ' thousand';
+    return String(Math.round(n));
   }
 
+  // ── Load data ──
   Promise.all([
-    fetch('city_dots.json').then(function(r) { return r.json(); }),
-    fetch('pop_model_data.json').then(function(r) { return r.json(); }),
-    fetch('pop_history.json').then(function(r) { return r.json(); }),
+    fetch('historical_dots_packed.json').then(function(r) { return r.json(); }),
     fetch('timeline.json').then(function(r) { return r.json(); }),
-    fetch('historical_dots.json').then(function(r) { return r.json(); })
+    fetch('pop_history.json').then(function(r) { return r.json(); })
   ]).then(function(results) {
-    var dots = results[0];
-    var modelData = results[1];
+    var packedDots = results[0]; // {year_str: "lat,lon;lat,lon;..."}
+    var TIMELINE = results[1];
     var popHistory = results[2];
-    var TIMELINE = results[3];
-    var histDots = results[4];  // {year_str: [[lat,lon], ...]}
-    console.log('Data loaded: ' + dots.length + ' dots, ' + TIMELINE.length + ' timeline points');
 
-    // Set slider max to timeline length
+    // Unpack dots: "lat*10,lon*10;..." → [[lat,lon], ...]
+    var allDots = {};
+    Object.keys(packedDots).forEach(function(yr) {
+      var str = packedDots[yr];
+      if (!str) { allDots[yr] = []; return; }
+      var pairs = str.split(';');
+      var arr = new Array(pairs.length);
+      for (var i = 0; i < pairs.length; i++) {
+        var parts = pairs[i].split(',');
+        arr[i] = [parseInt(parts[0]) / 10, parseInt(parts[1]) / 10];
+      }
+      allDots[yr] = arr;
+    });
+    packedDots = null; // free memory
+
+    // ── Setup slider ──
     var slider = document.getElementById('year-slider');
     slider.max = TIMELINE.length - 1;
-    // Start at 2025
     var startIdx = TIMELINE.indexOf(2025);
     if (startIdx < 0) startIdx = TIMELINE.indexOf(2023);
+    if (startIdx < 0) startIdx = TIMELINE.length - 1;
     slider.value = startIdx;
 
-    // Year display formatting
-    function formatYear(yr) {
-      if (yr < 0) return Math.abs(yr) + ' BC';
-      if (yr === 0) return '1 AD';
-      return String(yr);
-    }
-
-    // Cache computed states (invalidated on scenario change)
-    var stateCache = {};
-    function getState(code, year) {
-      var key = code + '_' + year + '_' + currentScenario;
-      if (stateCache[key]) return stateCache[key];
-
-      var result;
-      if (year <= 2023) {
-        // Historical: use actual population data
-        var h = popHistory[code];
-        var m = modelData[code];
-        var popBase = m ? m.p : 0;
-        if (!h || !popBase) {
-          result = { ratio: 0, elderlyPct: 0.05 };
-        } else {
-          // Find closest year in history
-          var pop = h[String(year)];
-          if (pop === undefined) {
-            // Interpolate between nearest available years
-            var years = Object.keys(h).map(Number).sort(function(a,b){return a-b;});
-            var lo = years[0], hi = years[years.length-1];
-            for (var i = 0; i < years.length - 1; i++) {
-              if (years[i] <= year && years[i+1] >= year) {
-                lo = years[i]; hi = years[i+1]; break;
-              }
-            }
-            var loP = h[String(lo)] || 0, hiP = h[String(hi)] || 0;
-            var t = (hi === lo) ? 0 : (year - lo) / (hi - lo);
-            pop = loP + (hiP - loP) * t;
-          }
-          var ratio = pop / popBase;
-
-          // Age color: use cohort model for 1950+, warm for before
-          var elderlyPct = 0.05; // default warm
-          if (year >= 1950 && m) {
-            // Reverse cohort: compute from 2023 backward
-            var s = computeState(m, year, 'stable');
-            elderlyPct = s.elderlyPct;
-          }
-          result = { ratio: ratio, elderlyPct: elderlyPct };
-        }
-      } else {
-        // Future: use model
-        var m = modelData[code];
-        if (!m) {
-          result = { ratio: 1.0, elderlyPct: 0.1 };
-        } else {
-          result = computeState(m, year, currentScenario);
-        }
-      }
-
-      stateCache[key] = result;
-      return result;
-    }
-
-    // Pre-compute per-country dot indices sorted by brightness asc
-    var countryDots = {};
-    dots.forEach(function(d, i) {
-      if (!d.country) return;
-      if (!countryDots[d.country]) countryDots[d.country] = [];
-      countryDots[d.country].push(i);
+    // ── Find max dots for buffer sizing ──
+    var MAX_DOTS = 0;
+    Object.keys(allDots).forEach(function(yr) {
+      if (allDots[yr].length > MAX_DOTS) MAX_DOTS = allDots[yr].length;
     });
-    Object.keys(countryDots).forEach(function(code) {
-      countryDots[code].sort(function(a, b) { return dots[a].brightness - dots[b].brightness; });
-    });
+    console.log('Max dots: ' + MAX_DOTS);
 
-    // Dot density weight: normalize so each dot represents roughly equal population
-    // weight > 1 = under-represented (few dots for large pop), < 1 = over-represented
-    var totalPop = 0, totalDotCount = 0;
-    Object.keys(countryDots).forEach(function(code) {
-      var m = modelData[code];
-      if (m) { totalPop += m.p; totalDotCount += countryDots[code].length; }
-    });
-    var globalAvgPPD = totalPop / totalDotCount; // pop per dot global avg
-    var countryWeight = {}; // per-country brightness weight
-    Object.keys(countryDots).forEach(function(code) {
-      var m = modelData[code];
-      if (!m) { countryWeight[code] = 1.0; return; }
-      var ppd = m.p / countryDots[code].length;
-      // weight = sqrt(ppd / globalAvg) — sqrt to avoid extreme values
-      countryWeight[code] = Math.sqrt(ppd / globalAvgPPD);
-    });
-    console.log('Density weights: JPN=' + (countryWeight['JPN']||0).toFixed(2) +
-      ' IND=' + (countryWeight['IND']||0).toFixed(2) +
-      ' NGA=' + (countryWeight['NGA']||0).toFixed(2) +
-      ' CAN=' + (countryWeight['CAN']||0).toFixed(2) +
-      ' FIN=' + (countryWeight['FIN']||0).toFixed(2));
-
-    // Per-dot rank within its country
-    var N = dots.length;
-    var dotRank = new Int32Array(N);
-    var dotCountryCode = new Array(N);
-    for (var i = 0; i < N; i++) {
-      dotRank[i] = -1;
-      dotCountryCode[i] = dots[i].country || '';
-    }
-    Object.keys(countryDots).forEach(function(code) {
-      var indices = countryDots[code];
-      for (var rank = 0; rank < indices.length; rank++) {
-        dotRank[indices[rank]] = rank;
-      }
-    });
-
-    // Build geometry with extra capacity for growth dots
-    // Max ratio ~3x (cap), so reserve up to 2x extra slots per country
-    var GROWTH_SLOTS_PER_COUNTRY = {};
-    var totalGrowthSlots = 0;
-    Object.keys(countryDots).forEach(function(code) {
-      var extra = Math.ceil(countryDots[code].length * 2);
-      GROWTH_SLOTS_PER_COUNTRY[code] = extra;
-      totalGrowthSlots += extra;
-    });
-    var TOTAL = N + totalGrowthSlots;
-    console.log('Buffer: ' + N + ' base + ' + totalGrowthSlots + ' growth = ' + TOTAL);
-
-    var positions = new Float32Array(TOTAL * 3);
-    var colors = new Float32Array(TOTAL * 3);
-    var sizes = new Float32Array(TOTAL);
-    var alphas = new Float32Array(TOTAL);
-    var origSizes = new Float32Array(N); // only for base dots
-    var origColors = new Float32Array(TOTAL * 3); // for age color blending
-
-    for (var i = 0; i < N; i++) {
-      var d = dots[i];
-      var pos = polar2Cartesian(d.lat, d.lon, 0.002);
-      positions[i * 3]     = pos[0];
-      positions[i * 3 + 1] = pos[1];
-      positions[i * 3 + 2] = pos[2];
-
-      // Warm tint
-      colors[i * 3]     = Math.min(1.0, (d.r * 1.3) / 255);
-      colors[i * 3 + 1] = d.g / 255;
-      colors[i * 3 + 2] = (d.b * 0.7) / 255;
-
-      origColors[i * 3]     = colors[i * 3];
-      origColors[i * 3 + 1] = colors[i * 3 + 1];
-      origColors[i * 3 + 2] = colors[i * 3 + 2];
-
-      var sz = 1.0 + (d.brightness / 127) * 2.5;
-      sizes[i] = sz;
-      origSizes[i] = sz;
-      alphas[i] = 1.0;
-    }
-    // Growth slots start hidden
-    for (var i = N; i < TOTAL; i++) {
-      alphas[i] = 0.0;
-      sizes[i] = 0.0;
-    }
-
-    // Pre-compute growth slot ranges per country
-    var growthSlotStart = {};
-    var offset = N;
-    Object.keys(countryDots).forEach(function(code) {
-      growthSlotStart[code] = offset;
-      offset += GROWTH_SLOTS_PER_COUNTRY[code];
-    });
-
-    // Pre-generate growth dot positions (near brightest existing dots)
-    // Seeded pseudo-random for consistency
-    var seed = 12345;
-    function pseudoRandom() {
-      seed = (seed * 16807 + 0) % 2147483647;
-      return seed / 2147483647;
-    }
-    Object.keys(countryDots).forEach(function(code) {
-      var indices = countryDots[code];
-      var nSlots = GROWTH_SLOTS_PER_COUNTRY[code];
-      var slotBase = growthSlotStart[code];
-      // Pick from brightest 1/3 as seeds
-      var seedPool = indices.slice(Math.floor(indices.length * 0.67));
-
-      for (var s = 0; s < nSlots; s++) {
-        var seedIdx = seedPool[Math.floor(pseudoRandom() * seedPool.length)];
-        var sd = dots[seedIdx];
-        // Small random offset in lat/lon (0.1-0.5 degrees)
-        var dlat = (pseudoRandom() - 0.5) * 0.8;
-        var dlon = (pseudoRandom() - 0.5) * 0.8;
-        var pos = polar2Cartesian(sd.lat + dlat, sd.lon + dlon, 0.002);
-        var idx = slotBase + s;
-        positions[idx * 3]     = pos[0];
-        positions[idx * 3 + 1] = pos[1];
-        positions[idx * 3 + 2] = pos[2];
-        // Slightly dimmer warm color
-        var b = 0.3 + pseudoRandom() * 0.4;
-        colors[idx * 3]     = Math.min(1.0, b * 1.3);
-        colors[idx * 3 + 1] = b * 0.9;
-        colors[idx * 3 + 2] = b * 0.6;
-        origColors[idx * 3]     = colors[idx * 3];
-        origColors[idx * 3 + 1] = colors[idx * 3 + 1];
-        origColors[idx * 3 + 2] = colors[idx * 3 + 2];
-        sizes[idx] = 1.0 + pseudoRandom() * 1.5;
-      }
-    });
+    // ── Build geometry ──
+    var positions = new Float32Array(MAX_DOTS * 3);
+    var dotColors = new Float32Array(MAX_DOTS * 3);
+    var dotSizes = new Float32Array(MAX_DOTS);
+    var dotAlphas = new Float32Array(MAX_DOTS);
 
     var geometry = new THREE.BufferGeometry();
     geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-    geometry.setAttribute('aColor', new THREE.BufferAttribute(colors, 3));
-    geometry.setAttribute('aSize', new THREE.BufferAttribute(sizes, 1));
-    geometry.setAttribute('aAlpha', new THREE.BufferAttribute(alphas, 1));
+    geometry.setAttribute('aColor', new THREE.BufferAttribute(dotColors, 3));
+    geometry.setAttribute('aSize', new THREE.BufferAttribute(dotSizes, 1));
+    geometry.setAttribute('aAlpha', new THREE.BufferAttribute(dotAlphas, 1));
+    geometry.setDrawRange(0, 0);
 
-    var pointsMaterial = new THREE.ShaderMaterial({
-      vertexShader: [
-        'attribute vec3 aColor;',
-        'attribute float aSize;',
-        'attribute float aAlpha;',
-        'varying vec3 vColor;',
-        'varying float vAlpha;',
-        'void main() {',
-        '  vColor = aColor;',
-        '  vAlpha = aAlpha;',
-        '  vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);',
-        '  gl_PointSize = clamp(aSize * (200.0 / -mvPosition.z), 1.0, 64.0);',
-        '  gl_Position = projectionMatrix * mvPosition;',
-        '}',
-      ].join('\n'),
-      fragmentShader: [
-        'varying vec3 vColor;',
-        'varying float vAlpha;',
-        'void main() {',
-        '  float d = length(gl_PointCoord - vec2(0.5));',
-        '  if (d > 0.5) discard;',
-        '  float glow = 1.0 - smoothstep(0.0, 0.5, d);',
-        '  glow = glow * glow;',
-        '  gl_FragColor = vec4(vColor * glow, glow * vAlpha);',
-        '}',
-      ].join('\n'),
-      transparent: true,
-      blending: THREE.AdditiveBlending,
-      depthWrite: false,
-    });
-
-    var pointCloud = new THREE.Points(geometry, pointsMaterial);
-
-    // ── Historical population dots (1 dot = 50K people) ──
-    // Find max dot count across all years for buffer sizing
-    var HC_MAX = 0;
-    Object.keys(histDots).forEach(function(yr) {
-      if (histDots[yr].length > HC_MAX) HC_MAX = histDots[yr].length;
-    });
-    console.log('Historical dots: max ' + HC_MAX + ' in any year');
-
-    var hcPositions = new Float32Array(HC_MAX * 3);
-    var hcColors = new Float32Array(HC_MAX * 3);
-    var hcSizes = new Float32Array(HC_MAX);
-    var hcAlphas = new Float32Array(HC_MAX);
-
-    var hcGeometry = new THREE.BufferGeometry();
-    hcGeometry.setAttribute('position', new THREE.BufferAttribute(hcPositions, 3));
-    hcGeometry.setAttribute('aColor', new THREE.BufferAttribute(hcColors, 3));
-    hcGeometry.setAttribute('aSize', new THREE.BufferAttribute(hcSizes, 1));
-    hcGeometry.setAttribute('aAlpha', new THREE.BufferAttribute(hcAlphas, 1));
-    hcGeometry.setDrawRange(0, 0); // start with nothing visible
-
-    // Historical dots get a wobble shader to convey imprecision
-    var hcMaterial = new THREE.ShaderMaterial({
+    // ── Shader with wobble for ancient dots ──
+    var material = new THREE.ShaderMaterial({
       uniforms: {
-        uTime: { value: 0.0 }
+        uTime: { value: 0.0 },
+        uWobble: { value: 1.0 }  // 1.0 = full wobble (ancient), 0.0 = none (modern)
       },
       vertexShader: [
         'uniform float uTime;',
+        'uniform float uWobble;',
         'attribute vec3 aColor;',
         'attribute float aSize;',
         'attribute float aAlpha;',
@@ -544,9 +222,8 @@
         'void main() {',
         '  vColor = aColor;',
         '  vAlpha = aAlpha;',
-        '  // Wobble: slow drift unique to each dot',
         '  float id = position.x * 13.7 + position.y * 7.3 + position.z * 11.1;',
-        '  vec3 wobble = vec3(',
+        '  vec3 wobble = uWobble * vec3(',
         '    sin(uTime * 0.4 + id) * 0.15,',
         '    cos(uTime * 0.3 + id * 1.3) * 0.15,',
         '    sin(uTime * 0.5 + id * 0.7) * 0.15',
@@ -572,278 +249,19 @@
       depthWrite: false,
     });
 
-    var hcPointCloud = new THREE.Points(hcGeometry, hcMaterial);
+    var pointCloud = new THREE.Points(geometry, material);
 
-    // Add to ThreeGlobe group for zoom/rotation tracking
+    // Add to ThreeGlobe
     setTimeout(function() {
-      var threeGlobe = findThreeGlobe();
-      if (threeGlobe) {
-        threeGlobe.add(pointCloud);
-        threeGlobe.add(hcPointCloud);
-        console.log('Points added to ThreeGlobe group');
-      } else {
-        world.scene().add(pointCloud);
-        world.scene().add(hcPointCloud);
-        console.log('Fallback: Points added to scene');
-      }
+      var found = null;
+      world.scene().traverse(function(obj) {
+        if (!found && obj.type === 'Group' && obj.children.length > 5) found = obj;
+      });
+      (found || world.scene()).add(pointCloud);
+      console.log('Points added');
     }, 500);
 
-    // ── Phase 2: Year slider ──
-    // Get historical city population for a given year (interpolate between data points)
-    // Age color: warm (young) → cool (elderly)
-    // elderlyPct 0.05 → orange, 0.40 → blue-white
-    function ageColorShift(origR, origG, origB, elderlyPct) {
-      // t: 0 = young (warm), 1 = very old (cold)
-      var t = Math.min(1.0, Math.max(0, (elderlyPct - 0.05) / 0.35));
-      // Warm: original warm tint. Cold: shift toward blue-white
-      var r = origR * (1 - t * 0.6);
-      var g = origG * (1 - t * 0.2);
-      var b = origB + (1.0 - origB) * t * 0.7;
-      return [r, g, b];
-    }
-
-    function updateYear(year) {
-      var alphaAttr = geometry.getAttribute('aAlpha');
-      var sizeAttr = geometry.getAttribute('aSize');
-      var colorAttr = geometry.getAttribute('aColor');
-
-      // Era transition: 0 = ancient fire, 1 = modern electric
-      // -10000~1800: fire, 1800~1950: transition, 1950+: electric
-      var era;
-      if (year <= 1800) {
-        era = 0;
-      } else if (year <= 1950) {
-        era = (year - 1800) / 150; // 0..1
-      } else {
-        era = 1;
-      }
-
-      // Blend between relative normalization (ancient) and absolute (modern)
-      // era: 0 = fully relative, 1 = fully absolute
-
-      // Cache states per country, apply density weight only for pre-modern
-      var states = {};
-      var maxWeightedRatio = 0;
-      Object.keys(countryDots).forEach(function(code) {
-        var s = getState(code, year);
-        // Density weight: full in ancient, fade out toward modern
-        var weightStrength = 1.0 - era; // 1.0 ancient, 0.0 modern
-        var w = 1.0 + ((countryWeight[code] || 1.0) - 1.0) * weightStrength;
-        s.weightedRatio = s.ratio * w;
-        states[code] = s;
-        if (s.weightedRatio > maxWeightedRatio) maxWeightedRatio = s.weightedRatio;
-      });
-
-      // Apply dot color based on era
-      function eraColor(idx, elderlyPct) {
-        var origR = origColors[idx*3];
-        var origG = origColors[idx*3+1];
-        var origB = origColors[idx*3+2];
-
-        if (era < 1) {
-          // Fire color: deep red-orange, desaturated green/blue
-          var fireR = Math.min(1.0, origR * 1.2 + 0.3);
-          var fireG = origR * 0.3;
-          var fireB = origR * 0.05;
-          // Blend fire → electric by era
-          var r = fireR * (1 - era) + origR * era;
-          var g = fireG * (1 - era) + origG * era;
-          var b = fireB * (1 - era) + origB * era;
-          return [r, g, b];
-        } else {
-          // Modern: age color shift
-          return ageColorShift(origR, origG, origB, elderlyPct);
-        }
-      }
-
-      // Clean switch: historical dots OR NASA dots, never both
-      var useHistorical = (year <= 1950);
-      var baseDotOpacity = useHistorical ? 0.0 : 1.0;
-
-      // Detect mode change and show transition overlay
-      var currentMode = useHistorical ? 'historical' : 'modern';
-      if (lastMode !== null && lastMode !== currentMode) {
-        showModeTransition(currentMode, year);
-      }
-      lastMode = currentMode;
-
-      // Update base dots
-      for (var i = 0; i < N; i++) {
-        var code = dotCountryCode[i];
-        if (!code || dotRank[i] < 0) {
-          alphaAttr.array[i] = baseDotOpacity;
-          sizeAttr.array[i] = origSizes[i];
-          continue;
-        }
-
-        var state = states[code] || { ratio: 1.0, elderlyPct: 0.1, weightedRatio: 1.0 };
-        var ratio = state.weightedRatio;
-
-        // Blend: relative (ancient) → absolute (modern)
-        var relativeRatio = (maxWeightedRatio > 0) ? ratio / maxWeightedRatio : ratio;
-        ratio = relativeRatio * (1 - era) + ratio * era;
-
-        var brightness_factor, size_factor;
-        if (ratio < 1) {
-          brightness_factor = Math.pow(ratio, 1.5);
-          size_factor = Math.pow(ratio, 1.2);
-        } else {
-          brightness_factor = Math.min(2.0, Math.pow(ratio, 0.6));
-          size_factor = Math.min(1.8, Math.pow(ratio, 0.4));
-        }
-
-        // Ancient fire: bigger, softer dots
-        var sizeMultiplier = 1.0 + (1 - era) * 0.8;
-
-        // For decline: also remove dots (dimmest first) when ratio is low
-        var dotVisible = true;
-        if (brightness_factor < 0.5 && dotRank[i] >= 0) {
-          var total = countryDots[code] ? countryDots[code].length : 1;
-          var keepFraction = brightness_factor * 2; // 0.5 → keep all, 0.0 → keep none
-          var keepCount = Math.floor(total * keepFraction);
-          // dotRank is sorted by brightness asc, keep the brightest
-          if (dotRank[i] < (total - keepCount)) {
-            dotVisible = false;
-          }
-        }
-
-        var finalAlpha = dotVisible ? Math.max(0.05, brightness_factor) : 0.0;
-        alphaAttr.array[i] = finalAlpha * baseDotOpacity; // hide in ancient era
-        sizeAttr.array[i] = dotVisible ? origSizes[i] * size_factor * sizeMultiplier : 0.0;
-
-        // Color
-        var c = eraColor(i, state.elderlyPct);
-        colorAttr.array[i*3]   = c[0];
-        colorAttr.array[i*3+1] = c[1];
-        colorAttr.array[i*3+2] = c[2];
-      }
-
-      // Update growth slots (only for modern era)
-      Object.keys(countryDots).forEach(function(code) {
-        var state = states[code] || { ratio: 1.0, elderlyPct: 0.1, weightedRatio: 1.0 };
-        var ratio = (era >= 1) ? state.weightedRatio : 0; // hide in ancient era
-        var nSlots = GROWTH_SLOTS_PER_COUNTRY[code];
-        var slotBase = growthSlotStart[code];
-
-        if (ratio > 1) {
-          var growthFraction = Math.min(1.0, (ratio - 1) / 2.0);
-          var nShow = Math.floor(nSlots * growthFraction);
-          for (var s = 0; s < nSlots; s++) {
-            var idx = slotBase + s;
-            if (s < nShow) {
-              alphaAttr.array[idx] = 0.6 + growthFraction * 0.4;
-              var c = eraColor(idx, state.elderlyPct);
-              colorAttr.array[idx*3]   = c[0];
-              colorAttr.array[idx*3+1] = c[1];
-              colorAttr.array[idx*3+2] = c[2];
-            } else {
-              alphaAttr.array[idx] = 0.0;
-            }
-          }
-        } else {
-          for (var s = 0; s < nSlots; s++) {
-            alphaAttr.array[slotBase + s] = 0.0;
-          }
-        }
-      });
-
-      // Set draw range to only render base dots + active growth slots
-      var maxActiveIdx = N; // at minimum, draw all base dots
-      Object.keys(countryDots).forEach(function(code) {
-        var nSlots = GROWTH_SLOTS_PER_COUNTRY[code];
-        var slotBase = growthSlotStart[code];
-        for (var s = nSlots - 1; s >= 0; s--) {
-          if (alphaAttr.array[slotBase + s] > 0) {
-            var end = slotBase + s + 1;
-            if (end > maxActiveIdx) maxActiveIdx = end;
-            break;
-          }
-        }
-      });
-      geometry.setDrawRange(0, maxActiveIdx);
-
-      alphaAttr.needsUpdate = true;
-      sizeAttr.needsUpdate = true;
-      colorAttr.needsUpdate = true;
-
-      // ── Update historical population dots (1 dot = 50K people) ──
-      var hcPosAttr = hcGeometry.getAttribute('position');
-      var hcAlphaAttr = hcGeometry.getAttribute('aAlpha');
-      var hcSizeAttr = hcGeometry.getAttribute('aSize');
-      var hcColorAttr = hcGeometry.getAttribute('aColor');
-
-      // Find closest year in histDots
-      var hdYears = Object.keys(histDots).map(Number).sort(function(a,b){return a-b;});
-      var hdYear = hdYears[0];
-      for (var j = 0; j < hdYears.length; j++) {
-        if (hdYears[j] >= year) {
-          hdYear = hdYears[j];
-          if (j > 0 && (year - hdYears[j-1]) < (hdYears[j] - year)) hdYear = hdYears[j-1];
-          break;
-        }
-      }
-      if (year > hdYears[hdYears.length-1]) hdYear = hdYears[hdYears.length-1];
-
-      var yearDots = histDots[String(hdYear)] || [];
-      var nVisible = Math.min(yearDots.length, HC_MAX);
-
-      // Clean switch: show historical dots only in historical mode
-      var hcOpacity = useHistorical ? 0.8 : 0.0;
-
-      for (var i = 0; i < nVisible; i++) {
-        var pos = polar2Cartesian(yearDots[i][0], yearDots[i][1], 0.003);
-        hcPosAttr.array[i*3]   = pos[0];
-        hcPosAttr.array[i*3+1] = pos[1];
-        hcPosAttr.array[i*3+2] = pos[2];
-        hcAlphaAttr.array[i] = hcOpacity;
-        hcSizeAttr.array[i] = 2.5;
-        // Fire color
-        if (era < 1) {
-          hcColorAttr.array[i*3]   = 1.0;
-          hcColorAttr.array[i*3+1] = 0.3;
-          hcColorAttr.array[i*3+2] = 0.05;
-        } else {
-          hcColorAttr.array[i*3]   = 1.0;
-          hcColorAttr.array[i*3+1] = 0.8;
-          hcColorAttr.array[i*3+2] = 0.5;
-        }
-      }
-      for (var i = nVisible; i < HC_MAX; i++) {
-        hcAlphaAttr.array[i] = 0.0;
-      }
-      hcGeometry.setDrawRange(0, nVisible);
-      hcPosAttr.needsUpdate = true;
-      hcAlphaAttr.needsUpdate = true;
-      hcSizeAttr.needsUpdate = true;
-      hcColorAttr.needsUpdate = true;
-
-      document.getElementById('year-label').textContent = formatYear(Math.round(year));
-
-      // Update legend
-      var legendEl = document.getElementById('legend-label');
-      if (useHistorical) {
-        legendEl.textContent = '\u25CF = 50,000 people (estimated placement)';
-      } else {
-        legendEl.textContent = '\u25CF = city light (NASA, brightness \u221D population)';
-      }
-
-      // World population display
-      var worldPop = getWorldPop(year);
-      var wpLabel = document.getElementById('world-pop-label');
-      wpLabel.textContent = worldPop > 0 ? '~' + formatPop(worldPop) : '';
-
-      // Grey out scenario buttons for historical years
-      var inFuture = year > 2023;
-      document.querySelectorAll('.scenario-btn').forEach(function(btn) {
-        btn.style.opacity = inFuture ? '' : '0.3';
-        btn.style.pointerEvents = inFuture ? '' : 'none';
-      });
-    }
-
-    // ── Mode transition ──
-    var lastMode = null; // 'historical' or 'modern'
-    var modeTransitionTimer = null;
-
+    // ── World population helper ──
     function getWorldPop(year) {
       var h = popHistory['OWID_WRL'];
       if (!h) return 0;
@@ -859,34 +277,76 @@
       return 0;
     }
 
-    function formatPop(n) {
-      if (n >= 1e9) return (n/1e9).toFixed(1) + ' billion';
-      if (n >= 1e6) return Math.round(n/1e6) + ' million';
-      if (n >= 1e3) return Math.round(n/1e3) + ' thousand';
-      return String(Math.round(n));
-    }
+    // ── Update display for a given year ──
+    function updateYear(year) {
+      var posAttr = geometry.getAttribute('position');
+      var colorAttr = geometry.getAttribute('aColor');
+      var sizeAttr = geometry.getAttribute('aSize');
+      var alphaAttr = geometry.getAttribute('aAlpha');
 
-    function showModeTransition(mode, year) {
-      var overlay = document.getElementById('mode-overlay');
-      var title = document.getElementById('mode-title');
-      var desc = document.getElementById('mode-desc');
-      var worldPop = getWorldPop(year);
-      var popStr = worldPop > 0 ? ('World population: ~' + formatPop(worldPop)) : '';
-      if (mode === 'historical') {
-        title.textContent = 'POPULATION MAP';
-        desc.innerHTML = '\u25CF = 50,000 people \u2014 estimated placement' + (popStr ? '<br>' + popStr : '');
-      } else {
-        title.textContent = 'CITY LIGHTS';
-        desc.innerHTML = 'NASA night imagery \u2014 brightness \u221D population change' + (popStr ? '<br>' + popStr : '');
+      // Find closest year in data
+      var dataYears = Object.keys(allDots).map(Number).sort(function(a,b){return a-b;});
+      var bestYear = dataYears[0];
+      for (var j = 0; j < dataYears.length; j++) {
+        if (dataYears[j] >= year) {
+          bestYear = dataYears[j];
+          if (j > 0 && (year - dataYears[j-1]) < (dataYears[j] - year)) bestYear = dataYears[j-1];
+          break;
+        }
       }
-      overlay.classList.add('visible');
-      if (modeTransitionTimer) clearTimeout(modeTransitionTimer);
-      modeTransitionTimer = setTimeout(function() {
-        overlay.classList.remove('visible');
-      }, 1800);
+      if (year > dataYears[dataYears.length-1]) bestYear = dataYears[dataYears.length-1];
+
+      var yearDots = allDots[String(bestYear)] || [];
+      var nVisible = Math.min(yearDots.length, MAX_DOTS);
+
+      // Era: ancient (<1800) vs modern (>=1800)
+      var ancient = (year < 1800);
+      material.uniforms.uWobble.value = 1.0;
+
+      // Color: fire (ancient) → warm white (modern)
+      var fireR = 1.0, fireG = 0.3, fireB = 0.05;
+      var modernR = 1.0, modernG = 0.85, modernB = 0.6;
+      var t = ancient ? 0 : Math.min(1, (year - 1800) / 150);
+      var cR = fireR * (1-t) + modernR * t;
+      var cG = fireG * (1-t) + modernG * t;
+      var cB = fireB * (1-t) + modernB * t;
+
+      for (var i = 0; i < nVisible; i++) {
+        var pos = polar2Cartesian(yearDots[i][0], yearDots[i][1], 0.003);
+        posAttr.array[i*3]   = pos[0];
+        posAttr.array[i*3+1] = pos[1];
+        posAttr.array[i*3+2] = pos[2];
+        colorAttr.array[i*3]   = cR;
+        colorAttr.array[i*3+1] = cG;
+        colorAttr.array[i*3+2] = cB;
+        sizeAttr.array[i] = 2.5;
+        alphaAttr.array[i] = 0.8;
+      }
+
+      geometry.setDrawRange(0, nVisible);
+      posAttr.needsUpdate = true;
+      colorAttr.needsUpdate = true;
+      sizeAttr.needsUpdate = true;
+      alphaAttr.needsUpdate = true;
+
+      // UI updates
+      document.getElementById('year-label').textContent = formatYear(Math.round(year));
+      document.getElementById('legend-label').textContent =
+        '\u25CF = 50,000 people' + (ancient ? ' (estimated placement)' : '');
+
+      var worldPop = getWorldPop(year);
+      document.getElementById('world-pop-label').textContent =
+        worldPop > 0 ? '~' + formatPop(worldPop) : '';
+
+      // Scenario buttons: grey out for past
+      var inFuture = year > 2023;
+      document.querySelectorAll('.scenario-btn').forEach(function(btn) {
+        btn.style.opacity = inFuture ? '' : '0.3';
+        btn.style.pointerEvents = inFuture ? '' : 'none';
+      });
     }
 
-    // ── Controls ──
+    // ── Playback controls ──
     var currentIdx = startIdx;
     var currentYear = TIMELINE[currentIdx];
     var playing = false;
@@ -939,6 +399,7 @@
       requestAnimationFrame(animate);
     }
 
+    // Speed buttons
     document.querySelectorAll('.speed-btn:not(.scenario-btn)').forEach(function(btn) {
       btn.addEventListener('click', function() {
         document.querySelectorAll('.speed-btn:not(.scenario-btn)').forEach(function(b) { b.classList.remove('active'); });
@@ -947,19 +408,22 @@
       });
     });
 
-    // Scenario buttons
+    // Scenario buttons (TODO: regenerate dots for different scenarios)
     var infoLabel = document.getElementById('info-label');
+    var SCENARIOS = {
+      linear: 'TFR continues current trend to zero',
+      stable: 'TFR stays at 2023 level',
+      soft:   'TFR decline slows, floor at 0.8',
+    };
     document.querySelectorAll('.scenario-btn').forEach(function(btn) {
       btn.addEventListener('click', function() {
         document.querySelectorAll('.scenario-btn').forEach(function(b) { b.classList.remove('active'); });
         btn.classList.add('active');
-        currentScenario = btn.dataset.scenario;
-        stateCache = {}; // invalidate cache
-        infoLabel.textContent = SCENARIOS[currentScenario].desc;
-        updateYear(currentYear);
+        infoLabel.textContent = SCENARIOS[btn.dataset.scenario];
+        // TODO: load scenario-specific dots for 2024+
       });
     });
-    infoLabel.textContent = SCENARIOS[currentScenario].desc;
+    infoLabel.textContent = SCENARIOS['linear'];
 
     // Rotate toggle
     var rotateBtn = document.getElementById('rotate-btn');
@@ -970,9 +434,9 @@
       rotateBtn.style.opacity = rotating ? '1' : '0.3';
     });
 
-    // Wobble animation loop
+    // Wobble animation
     function wobbleLoop() {
-      hcMaterial.uniforms.uTime.value = performance.now() / 1000;
+      material.uniforms.uTime.value = performance.now() / 1000;
       requestAnimationFrame(wobbleLoop);
     }
     wobbleLoop();
@@ -980,10 +444,10 @@
     // Ready
     updateYear(currentYear);
     document.getElementById('loading').classList.add('hidden');
-    console.log('Phase 2: All ready');
+    console.log('Ready: ' + MAX_DOTS + ' max dots, ' + TIMELINE.length + ' timeline points');
 
   }).catch(function(err) {
-    console.error('Failed to load data:', err);
+    console.error('Load error:', err);
     document.querySelector('.loading-text').textContent = 'Error: ' + err.message;
   });
 

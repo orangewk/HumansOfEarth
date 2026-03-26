@@ -1,0 +1,458 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>People of Earth — 10000 BC–2100 AD</title>
+<style>
+  body { margin: 0; background: #000; color: #fff; font-family: 'Segoe UI', system-ui, sans-serif; overflow: hidden; }
+  #globeViz { width: 100vw; height: 100vh; }
+
+  .overlay { position: fixed; z-index: 10; pointer-events: none; }
+  .overlay > * { pointer-events: auto; }
+
+  .title-bar { top: 20px; left: 0; right: 0; text-align: center; }
+  .title-bar h1 { font-size: 1.2rem; font-weight: 300; letter-spacing: 0.3em; text-transform: uppercase; opacity: 0.6; }
+
+  .year-display { top: 50%; right: 40px; transform: translateY(-50%); text-align: right; }
+  .year-display .year { font-size: 5rem; font-weight: 100; line-height: 1; opacity: 0.8; font-variant-numeric: tabular-nums; }
+  .year-display .info { font-size: 0.85rem; font-weight: 300; opacity: 0.4; margin-top: 8px; }
+
+  .controls {
+    position: fixed; bottom: 40px; left: 50%; transform: translateX(-50%); z-index: 10;
+    display: flex; align-items: center; gap: 12px; flex-wrap: wrap; justify-content: center;
+    background: rgba(255,255,255,0.05); backdrop-filter: blur(10px);
+    border: 1px solid rgba(255,255,255,0.1); border-radius: 20px; padding: 10px 20px;
+    max-width: 90vw;
+  }
+  .play-btn {
+    background: none; border: 1px solid rgba(255,255,255,0.3); color: #fff;
+    width: 36px; height: 36px; border-radius: 50%; cursor: pointer;
+    display: flex; align-items: center; justify-content: center; font-size: 14px;
+  }
+  .play-btn:hover { border-color: rgba(255,255,255,0.7); }
+  .slider-container { display: flex; align-items: center; gap: 10px; }
+  .slider-container label { font-size: 0.75rem; opacity: 0.4; font-variant-numeric: tabular-nums; }
+  input[type="range"] {
+    -webkit-appearance: none; width: 300px; height: 3px;
+    background: rgba(255,255,255,0.15); border-radius: 2px; outline: none;
+  }
+  input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none; width: 14px; height: 14px; border-radius: 50%; background: #fff; cursor: pointer;
+  }
+  .speed-btn {
+    background: none; border: none; color: rgba(255,255,255,0.4);
+    font-size: 0.75rem; cursor: pointer; padding: 4px 8px;
+  }
+  .speed-btn:hover, .speed-btn.active { color: #fff; }
+  .scenario-btn { position: relative; }
+  .scenario-btn::after {
+    content: attr(data-tip);
+    position: absolute; bottom: 130%; left: 50%; transform: translateX(-50%);
+    background: rgba(0,0,0,0.9); border: 1px solid rgba(255,255,255,0.2);
+    border-radius: 6px; padding: 6px 10px; font-size: 0.7rem; white-space: nowrap;
+    color: rgba(255,255,255,0.8); pointer-events: none;
+    opacity: 0; transition: opacity 0.2s;
+  }
+  .scenario-btn:hover::after { opacity: 1; }
+
+  .loading {
+    position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
+    background: #000; z-index: 100; transition: opacity 0.5s;
+  }
+  .loading.hidden { opacity: 0; pointer-events: none; }
+  .loading-text { font-size: 1rem; font-weight: 300; letter-spacing: 0.2em; opacity: 0.5; }
+</style>
+<script src="//cdn.jsdelivr.net/npm/three/build/three.min.js"></script>
+<script src="//cdn.jsdelivr.net/npm/globe.gl"></script>
+</head>
+<body>
+
+<div class="loading" id="loading">
+  <div class="loading-text">Loading...</div>
+</div>
+
+<div id="globeViz"></div>
+
+<div class="overlay title-bar">
+  <h1>People of Earth</h1>
+</div>
+
+<div class="overlay year-display">
+  <div class="year" id="year-label">2025</div>
+  <div class="info" id="info-label"></div>
+  <div class="info" id="legend-label" style="margin-top:4px; font-size:0.7rem;"></div>
+  <div class="info" id="world-pop-label" style="font-size:0.9rem; opacity:0.6; margin-top:4px;"></div>
+</div>
+
+<div class="controls">
+  <button class="play-btn" id="prev-btn" title="Previous" style="font-size:11px;">&#9664;</button>
+  <button class="play-btn" id="play-btn" title="Play / Pause">&#9654;</button>
+  <button class="play-btn" id="next-btn" title="Next" style="font-size:11px;">&#9654;</button>
+  <div class="slider-container">
+    <label>10000 BC</label>
+    <input type="range" id="year-slider" min="0" max="100" value="0" step="1">
+    <label>2100</label>
+  </div>
+  <button class="speed-btn active" data-speed="1">1x</button>
+  <button class="speed-btn" data-speed="3">3x</button>
+  <button class="speed-btn" data-speed="10">10x</button>
+  <span style="opacity:0.2; margin:0 4px;">|</span>
+  <button class="speed-btn scenario-btn active" data-scenario="linear" data-tip="TFR continues current decline to zero">Linear</button>
+  <button class="speed-btn scenario-btn" data-scenario="stable" data-tip="TFR stays at 2023 level">Stable</button>
+  <button class="speed-btn scenario-btn" data-scenario="soft" data-tip="TFR decline slows, floor at 0.8">Soft</button>
+  <span style="opacity:0.2; margin:0 4px;">|</span>
+  <button class="play-btn" id="rotate-btn" title="Auto-rotate" style="font-size:11px;">&#x21BB;</button>
+</div>
+
+<script>
+(function() {
+
+  // ── Globe ──
+  var world = new Globe(document.getElementById('globeViz'))
+    .globeImageUrl('earth_night_base.jpg')
+    .backgroundImageUrl('//cdn.jsdelivr.net/npm/three-globe/example/img/night-sky.png')
+    .atmosphereColor('rgba(60, 80, 120, 0.3)')
+    .atmosphereAltitude(0.12)
+    .enablePointerInteraction(false);
+
+  world.pointOfView({ lat: 20, lng: 100, altitude: 2.2 });
+
+  var controls = world.controls();
+  if (controls) {
+    controls.autoRotate = true;
+    controls.autoRotateSpeed = 0.3;
+  }
+
+  // ── Constants ──
+  var GLOBE_RADIUS = 100;
+  var DEG2RAD = Math.PI / 180;
+
+  function polar2Cartesian(lat, lng, alt) {
+    var phi = (90 - lat) * DEG2RAD;
+    var theta = (90 - lng) * DEG2RAD;
+    var r = GLOBE_RADIUS * (1 + alt);
+    return [
+      r * Math.sin(phi) * Math.cos(theta),
+      r * Math.cos(phi),
+      r * Math.sin(phi) * Math.sin(theta)
+    ];
+  }
+
+  function formatYear(yr) {
+    if (yr < 0) return Math.abs(yr) + ' BC';
+    if (yr === 0) return '1 AD';
+    return String(yr);
+  }
+
+  function formatPop(n) {
+    if (n >= 1e9) return (n/1e9).toFixed(1) + ' billion';
+    if (n >= 1e6) return Math.round(n/1e6) + ' million';
+    if (n >= 1e3) return Math.round(n/1e3) + ' thousand';
+    return String(Math.round(n));
+  }
+
+  // ── Load data ──
+  Promise.all([
+    fetch('historical_dots_packed.json').then(function(r) { return r.json(); }),
+    fetch('timeline.json').then(function(r) { return r.json(); }),
+    fetch('pop_history.json').then(function(r) { return r.json(); })
+  ]).then(function(results) {
+    var packedDots = results[0]; // {year_str: "lat,lon;lat,lon;..."}
+    var TIMELINE = results[1];
+    var popHistory = results[2];
+
+    // Unpack dots: "lat*10,lon*10;..." → [[lat,lon], ...]
+    var allDots = {};
+    Object.keys(packedDots).forEach(function(yr) {
+      var str = packedDots[yr];
+      if (!str) { allDots[yr] = []; return; }
+      var pairs = str.split(';');
+      var arr = new Array(pairs.length);
+      for (var i = 0; i < pairs.length; i++) {
+        var parts = pairs[i].split(',');
+        arr[i] = [parseInt(parts[0]) / 10, parseInt(parts[1]) / 10];
+      }
+      allDots[yr] = arr;
+    });
+    packedDots = null; // free memory
+
+    // ── Setup slider ──
+    var slider = document.getElementById('year-slider');
+    slider.max = TIMELINE.length - 1;
+    var startIdx = TIMELINE.indexOf(2025);
+    if (startIdx < 0) startIdx = TIMELINE.indexOf(2023);
+    if (startIdx < 0) startIdx = TIMELINE.length - 1;
+    slider.value = startIdx;
+
+    // ── Find max dots for buffer sizing ──
+    var MAX_DOTS = 0;
+    Object.keys(allDots).forEach(function(yr) {
+      if (allDots[yr].length > MAX_DOTS) MAX_DOTS = allDots[yr].length;
+    });
+    console.log('Max dots: ' + MAX_DOTS);
+
+    // ── Build geometry ──
+    var positions = new Float32Array(MAX_DOTS * 3);
+    var dotColors = new Float32Array(MAX_DOTS * 3);
+    var dotSizes = new Float32Array(MAX_DOTS);
+    var dotAlphas = new Float32Array(MAX_DOTS);
+
+    var geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    geometry.setAttribute('aColor', new THREE.BufferAttribute(dotColors, 3));
+    geometry.setAttribute('aSize', new THREE.BufferAttribute(dotSizes, 1));
+    geometry.setAttribute('aAlpha', new THREE.BufferAttribute(dotAlphas, 1));
+    geometry.setDrawRange(0, 0);
+
+    // ── Shader with wobble for ancient dots ──
+    var material = new THREE.ShaderMaterial({
+      uniforms: {
+        uTime: { value: 0.0 },
+        uWobble: { value: 1.0 }  // 1.0 = full wobble (ancient), 0.0 = none (modern)
+      },
+      vertexShader: [
+        'uniform float uTime;',
+        'uniform float uWobble;',
+        'attribute vec3 aColor;',
+        'attribute float aSize;',
+        'attribute float aAlpha;',
+        'varying vec3 vColor;',
+        'varying float vAlpha;',
+        'void main() {',
+        '  vColor = aColor;',
+        '  vAlpha = aAlpha;',
+        '  float id = position.x * 13.7 + position.y * 7.3 + position.z * 11.1;',
+        '  vec3 wobble = uWobble * vec3(',
+        '    sin(uTime * 0.4 + id) * 0.15,',
+        '    cos(uTime * 0.3 + id * 1.3) * 0.15,',
+        '    sin(uTime * 0.5 + id * 0.7) * 0.15',
+        '  );',
+        '  vec4 mvPosition = modelViewMatrix * vec4(position + wobble, 1.0);',
+        '  gl_PointSize = clamp(aSize * (200.0 / -mvPosition.z), 1.0, 64.0);',
+        '  gl_Position = projectionMatrix * mvPosition;',
+        '}',
+      ].join('\n'),
+      fragmentShader: [
+        'varying vec3 vColor;',
+        'varying float vAlpha;',
+        'void main() {',
+        '  float d = length(gl_PointCoord - vec2(0.5));',
+        '  if (d > 0.5) discard;',
+        '  float glow = 1.0 - smoothstep(0.0, 0.5, d);',
+        '  glow = glow * glow;',
+        '  gl_FragColor = vec4(vColor * glow, glow * vAlpha);',
+        '}',
+      ].join('\n'),
+      transparent: true,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+    });
+
+    var pointCloud = new THREE.Points(geometry, material);
+
+    // Add to ThreeGlobe
+    setTimeout(function() {
+      var found = null;
+      world.scene().traverse(function(obj) {
+        if (!found && obj.type === 'Group' && obj.children.length > 5) found = obj;
+      });
+      (found || world.scene()).add(pointCloud);
+      console.log('Points added');
+    }, 500);
+
+    // ── World population helper ──
+    function getWorldPop(year) {
+      var h = popHistory['OWID_WRL'];
+      if (!h) return 0;
+      var p = h[String(year)];
+      if (p) return p;
+      var yrs = Object.keys(h).map(Number).sort(function(a,b){return a-b;});
+      for (var i = 0; i < yrs.length - 1; i++) {
+        if (yrs[i] <= year && yrs[i+1] >= year) {
+          var t = (year - yrs[i]) / (yrs[i+1] - yrs[i]);
+          return h[String(yrs[i])] * (1-t) + h[String(yrs[i+1])] * t;
+        }
+      }
+      return 0;
+    }
+
+    // ── Update display for a given year ──
+    function updateYear(year) {
+      var posAttr = geometry.getAttribute('position');
+      var colorAttr = geometry.getAttribute('aColor');
+      var sizeAttr = geometry.getAttribute('aSize');
+      var alphaAttr = geometry.getAttribute('aAlpha');
+
+      // Find closest year in data
+      var dataYears = Object.keys(allDots).map(Number).sort(function(a,b){return a-b;});
+      var bestYear = dataYears[0];
+      for (var j = 0; j < dataYears.length; j++) {
+        if (dataYears[j] >= year) {
+          bestYear = dataYears[j];
+          if (j > 0 && (year - dataYears[j-1]) < (dataYears[j] - year)) bestYear = dataYears[j-1];
+          break;
+        }
+      }
+      if (year > dataYears[dataYears.length-1]) bestYear = dataYears[dataYears.length-1];
+
+      var yearDots = allDots[String(bestYear)] || [];
+      var nVisible = Math.min(yearDots.length, MAX_DOTS);
+
+      // Era: ancient (<1800) vs modern (>=1800)
+      var ancient = (year < 1800);
+      var wobbleAmount = ancient ? 1.0 : Math.max(0, 1.0 - (year - 1800) / 150);
+      material.uniforms.uWobble.value = wobbleAmount;
+
+      // Color: fire (ancient) → warm white (modern)
+      var fireR = 1.0, fireG = 0.3, fireB = 0.05;
+      var modernR = 1.0, modernG = 0.85, modernB = 0.6;
+      var t = ancient ? 0 : Math.min(1, (year - 1800) / 150);
+      var cR = fireR * (1-t) + modernR * t;
+      var cG = fireG * (1-t) + modernG * t;
+      var cB = fireB * (1-t) + modernB * t;
+
+      for (var i = 0; i < nVisible; i++) {
+        var pos = polar2Cartesian(yearDots[i][0], yearDots[i][1], 0.003);
+        posAttr.array[i*3]   = pos[0];
+        posAttr.array[i*3+1] = pos[1];
+        posAttr.array[i*3+2] = pos[2];
+        colorAttr.array[i*3]   = cR;
+        colorAttr.array[i*3+1] = cG;
+        colorAttr.array[i*3+2] = cB;
+        sizeAttr.array[i] = 2.5;
+        alphaAttr.array[i] = 0.8;
+      }
+
+      geometry.setDrawRange(0, nVisible);
+      posAttr.needsUpdate = true;
+      colorAttr.needsUpdate = true;
+      sizeAttr.needsUpdate = true;
+      alphaAttr.needsUpdate = true;
+
+      // UI updates
+      document.getElementById('year-label').textContent = formatYear(Math.round(year));
+      document.getElementById('legend-label').textContent =
+        '\u25CF = 50,000 people' + (ancient ? ' (estimated placement)' : '');
+
+      var worldPop = getWorldPop(year);
+      document.getElementById('world-pop-label').textContent =
+        worldPop > 0 ? '~' + formatPop(worldPop) : '';
+
+      // Scenario buttons: grey out for past
+      var inFuture = year > 2023;
+      document.querySelectorAll('.scenario-btn').forEach(function(btn) {
+        btn.style.opacity = inFuture ? '' : '0.3';
+        btn.style.pointerEvents = inFuture ? '' : 'none';
+      });
+    }
+
+    // ── Playback controls ──
+    var currentIdx = startIdx;
+    var currentYear = TIMELINE[currentIdx];
+    var playing = false;
+    var speed = 1;
+    var lastTick = 0;
+    var TICK_INTERVAL = 300;
+
+    slider.addEventListener('input', function() {
+      currentIdx = parseInt(slider.value);
+      currentYear = TIMELINE[currentIdx];
+      updateYear(currentYear);
+    });
+
+    function stepBy(delta) {
+      currentIdx = Math.max(0, Math.min(TIMELINE.length - 1, currentIdx + delta));
+      currentYear = TIMELINE[currentIdx];
+      slider.value = currentIdx;
+      updateYear(currentYear);
+    }
+
+    document.getElementById('prev-btn').addEventListener('click', function() { stepBy(-1); });
+    document.getElementById('next-btn').addEventListener('click', function() { stepBy(1); });
+
+    var playBtn = document.getElementById('play-btn');
+    playBtn.addEventListener('click', function() {
+      playing = !playing;
+      playBtn.innerHTML = playing ? '&#9646;&#9646;' : '&#9654;';
+      if (playing) {
+        if (currentIdx >= TIMELINE.length - 1) { currentIdx = 0; slider.value = 0; }
+        lastTick = performance.now();
+        requestAnimationFrame(animate);
+      }
+    });
+
+    function animate() {
+      if (!playing) return;
+      var now = performance.now();
+      if (now - lastTick >= TICK_INTERVAL) {
+        currentIdx += speed;
+        if (currentIdx >= TIMELINE.length) {
+          currentIdx = TIMELINE.length - 1;
+          playing = false;
+          playBtn.innerHTML = '&#9654;';
+        }
+        currentYear = TIMELINE[currentIdx];
+        slider.value = currentIdx;
+        updateYear(currentYear);
+        lastTick = now;
+      }
+      requestAnimationFrame(animate);
+    }
+
+    // Speed buttons
+    document.querySelectorAll('.speed-btn:not(.scenario-btn)').forEach(function(btn) {
+      btn.addEventListener('click', function() {
+        document.querySelectorAll('.speed-btn:not(.scenario-btn)').forEach(function(b) { b.classList.remove('active'); });
+        btn.classList.add('active');
+        speed = parseInt(btn.dataset.speed);
+      });
+    });
+
+    // Scenario buttons (TODO: regenerate dots for different scenarios)
+    var infoLabel = document.getElementById('info-label');
+    var SCENARIOS = {
+      linear: 'TFR continues current trend to zero',
+      stable: 'TFR stays at 2023 level',
+      soft:   'TFR decline slows, floor at 0.8',
+    };
+    document.querySelectorAll('.scenario-btn').forEach(function(btn) {
+      btn.addEventListener('click', function() {
+        document.querySelectorAll('.scenario-btn').forEach(function(b) { b.classList.remove('active'); });
+        btn.classList.add('active');
+        infoLabel.textContent = SCENARIOS[btn.dataset.scenario];
+        // TODO: load scenario-specific dots for 2024+
+      });
+    });
+    infoLabel.textContent = SCENARIOS['linear'];
+
+    // Rotate toggle
+    var rotateBtn = document.getElementById('rotate-btn');
+    var rotating = true;
+    rotateBtn.addEventListener('click', function() {
+      rotating = !rotating;
+      if (controls) controls.autoRotate = rotating;
+      rotateBtn.style.opacity = rotating ? '1' : '0.3';
+    });
+
+    // Wobble animation
+    function wobbleLoop() {
+      material.uniforms.uTime.value = performance.now() / 1000;
+      requestAnimationFrame(wobbleLoop);
+    }
+    wobbleLoop();
+
+    // Ready
+    updateYear(currentYear);
+    document.getElementById('loading').classList.add('hidden');
+    console.log('Ready: ' + MAX_DOTS + ' max dots, ' + TIMELINE.length + ' timeline points');
+
+  }).catch(function(err) {
+    console.error('Load error:', err);
+    document.querySelector('.loading-text').textContent = 'Error: ' + err.message;
+  });
+
+})();
+</script>
+</body>
+</html>
