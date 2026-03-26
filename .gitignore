@@ -8,6 +8,8 @@ population_data.json
 extrapolated.json
 owid_pop.csv
 *.csv
+!countries_coords.csv
+!ssp_gdp_ppp.csv
 *.gz
 
 # Intermediate/debug images
