@@ -97,6 +97,7 @@
 <div class="controls">
   <button class="play-btn" id="play-btn" title="Play / Pause (Space)">&#9654;</button>
   <input type="range" id="year-slider" min="0" max="100" value="0" step="1" style="flex:1; min-width:150px;">
+  <button class="play-btn" id="rotate-btn" title="Rotate (R)" style="font-size:11px;">&#x21BB;</button>
   <button class="play-btn" id="settings-btn" title="Settings" style="font-size:13px;">&#9881;</button>
 </div>
 
@@ -116,7 +117,6 @@
   <div class="settings-group">
     <span class="settings-label">Display</span>
     <button class="speed-btn" id="age-btn">Age color</button>
-    <button class="speed-btn" id="rotate-btn">Rotate</button>
   </div>
   <div style="margin-top:4px; font-size:0.6rem; opacity:0.3;" id="shortcuts-label"></div>
   <div class="settings-group" style="margin-top:2px;">
@@ -525,6 +525,7 @@
       if (e.key === 'ArrowLeft') { stepBy(-1); e.preventDefault(); }
       else if (e.key === 'ArrowRight') { stepBy(1); e.preventDefault(); }
       else if (e.key === ' ') { playBtn.click(); e.preventDefault(); }
+      else if (e.key === 'r' || e.key === 'R') { rotateBtn.click(); }
     });
 
     var playBtn = document.getElementById('play-btn');
@@ -625,17 +626,15 @@
         if (baseDots.length === 0) return;
 
         var rng = seededRng(cidx * 31337 + year);
-        // Downsample if > 50K total expected
-        var actualDots = Math.min(nDots, Math.floor(nDots / 2) + 1);
-        // Hmm, just keep it consistent with the packed data downsampling
-        if (nDots > baseDots.length * 2) {
-          actualDots = Math.min(nDots, baseDots.length * 2);
-        }
+        // Match packed data: it was downsampled by half (dots[::2])
+        // So use same ratio: actual = nDots / 2
+        var actualDots = Math.max(1, Math.floor(nDots / 2));
 
         for (var i = 0; i < actualDots; i++) {
           var base = baseDots[i % baseDots.length];
-          var dlat = (rng() - 0.5) * 1.2;
-          var dlon = (rng() - 0.5) * 1.2;
+          // Small offset to avoid exact overlap, preserve city clustering
+          var dlat = (rng() - 0.5) * 0.3;
+          var dlon = (rng() - 0.5) * 0.3;
           result.push([
             Math.round((base[0] + dlat) * 10) / 10,
             Math.round((base[1] + dlon) * 10) / 10,
