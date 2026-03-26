@@ -81,7 +81,7 @@
 <div class="overlay year-display">
   <div class="year" id="year-label">2025</div>
   <div class="info" id="info-label"></div>
-  <div class="info" id="legend-label" style="margin-top:4px; font-size:0.7rem;"></div>
+  <div class="info" id="legend-label" style="margin-top:4px; font-size:0.7rem; line-height:1.6;"></div>
   <div class="info" id="world-pop-label" style="font-size:0.9rem; opacity:0.6; margin-top:4px;"></div>
 </div>
 
@@ -101,6 +101,8 @@
   <button class="speed-btn scenario-btn active" data-scenario="linear" data-tip="TFR continues current decline to zero">Linear</button>
   <button class="speed-btn scenario-btn" data-scenario="stable" data-tip="TFR stays at 2023 level">Stable</button>
   <button class="speed-btn scenario-btn" data-scenario="soft" data-tip="TFR decline slows, floor at 0.8">Soft</button>
+  <span style="opacity:0.2; margin:0 4px;">|</span>
+  <button class="speed-btn" id="age-btn" data-tip="年齢構成で色分け (elderly→blue)">Age</button>
   <span style="opacity:0.2; margin:0 4px;">|</span>
   <button class="play-btn" id="rotate-btn" title="Auto-rotate" style="font-size:11px;">&#x21BB;</button>
 </div>
@@ -156,26 +158,32 @@
   Promise.all([
     fetch('historical_dots_packed.json').then(function(r) { return r.json(); }),
     fetch('timeline.json').then(function(r) { return r.json(); }),
-    fetch('pop_history.json').then(function(r) { return r.json(); })
+    fetch('pop_history.json').then(function(r) { return r.json(); }),
+    fetch('pop_model_data.json').then(function(r) { return r.json(); })
   ]).then(function(results) {
-    var packedDots = results[0]; // {year_str: "lat,lon;lat,lon;..."}
+    var packedData = results[0]; // {countries: [...], dots: {year: "lat,lon,cidx;..."}}
     var TIMELINE = results[1];
     var popHistory = results[2];
 
-    // Unpack dots: "lat*10,lon*10;..." → [[lat,lon], ...]
+    var modelData = results[3];
+
+    var COUNTRY_CODES = packedData.countries; // index → ISO code
+    console.log('Countries: ' + COUNTRY_CODES.length);
+
+    // Unpack dots: "lat*10,lon*10,cidx;..." → [[lat, lon, countryIdx], ...]
     var allDots = {};
-    Object.keys(packedDots).forEach(function(yr) {
-      var str = packedDots[yr];
+    Object.keys(packedData.dots).forEach(function(yr) {
+      var str = packedData.dots[yr];
       if (!str) { allDots[yr] = []; return; }
       var pairs = str.split(';');
       var arr = new Array(pairs.length);
       for (var i = 0; i < pairs.length; i++) {
         var parts = pairs[i].split(',');
-        arr[i] = [parseInt(parts[0]) / 10, parseInt(parts[1]) / 10];
+        arr[i] = [parseInt(parts[0]) / 10, parseInt(parts[1]) / 10, parseInt(parts[2])];
       }
       allDots[yr] = arr;
     });
-    packedDots = null; // free memory
+    packedData = null; // free memory
 
     // ── Setup slider ──
     var slider = document.getElementById('year-slider');
@@ -303,19 +311,71 @@
       var ancient = (year < 1800);
       material.uniforms.uWobble.value = 1.0;
 
-      // Color: fire (ancient) → warm white (modern)
+      // Color
       var fireR = 1.0, fireG = 0.3, fireB = 0.05;
       var modernR = 1.0, modernG = 0.55, modernB = 0.15;
-      var t = ancient ? 0 : Math.min(1, (year - 1800) / 150);
-      var cR = fireR * (1-t) + modernR * t;
-      var cG = fireG * (1-t) + modernG * t;
-      var cB = fireB * (1-t) + modernB * t;
+      var colorT = ancient ? 0 : Math.min(1, (year - 1800) / 150);
+
+      // Pre-compute elderly % per country if age mode is on
+      var countryElderly = null;
+      if (showAge && year >= 1950) {
+        countryElderly = {};
+        COUNTRY_CODES.forEach(function(code, idx) {
+          var m = modelData[code];
+          if (!m) return;
+          // Simple cohort: compute elderly fraction
+          var le = m.l, tfr = m.t, slope = m.s, im = m.i;
+          var young = m.p * (m.y0 || 0.2);
+          var working = m.p * (1 - (m.y0 || 0.2) - (m.e0 || 0.05));
+          var elderly = m.p * (m.e0 || 0.05);
+          var targetYear = Math.min(year, 2100);
+          for (var yr = 2024; yr <= targetYear; yr++) {
+            var yearTfr = Math.max(0, tfr + slope * (yr - 2023));
+            var deathRate = 1 / le;
+            var fertilityRatio = yearTfr / 2.1;
+            var births = (working + young * 0.3) * deathRate * fertilityRatio * (1 - im);
+            var youngToWork = young / 15;
+            var workToElder = working / 50;
+            young = Math.max(0, young + births - youngToWork - young * deathRate * 0.3);
+            working = Math.max(0, working + youngToWork - workToElder - working * deathRate * 0.5);
+            elderly = Math.max(0, elderly + workToElder - elderly * deathRate * 2.5);
+          }
+          var total = young + working + elderly;
+          countryElderly[idx] = total > 0 ? elderly / total : 0;
+        });
+      }
 
       for (var i = 0; i < nVisible; i++) {
         var pos = polar2Cartesian(yearDots[i][0], yearDots[i][1], 0.003);
         posAttr.array[i*3]   = pos[0];
         posAttr.array[i*3+1] = pos[1];
         posAttr.array[i*3+2] = pos[2];
+
+        var cR, cG, cB;
+        if (countryElderly && yearDots[i][2] !== undefined) {
+          // Age coloring: elderly % → orange to blue-white
+          var ePct = countryElderly[yearDots[i][2]] || 0;
+          // 5-stop gradient: orange → gold → emerald → blue → purple
+          var ageT = Math.min(1.0, Math.max(0, (ePct - 0.05) / 0.55)); // 5%→60%
+          var stops = [
+            [1.00, 0.40, 0.00],  // 0.0: #ff6600 orange
+            [0.87, 0.80, 0.00],  // 0.25: #ddcc00 gold
+            [0.27, 0.80, 0.53],  // 0.5: #44cc88 emerald
+            [0.27, 0.53, 0.87],  // 0.75: #4488dd blue
+            [0.53, 0.33, 0.80],  // 1.0: #8855cc purple
+          ];
+          var seg = ageT * 4; // 0..4
+          var si = Math.min(3, Math.floor(seg));
+          var sf = seg - si;
+          cR = stops[si][0] * (1-sf) + stops[si+1][0] * sf;
+          cG = stops[si][1] * (1-sf) + stops[si+1][1] * sf;
+          cB = stops[si][2] * (1-sf) + stops[si+1][2] * sf;
+        } else {
+          cR = fireR * (1-colorT) + modernR * colorT;
+          cG = fireG * (1-colorT) + modernG * colorT;
+          cB = fireB * (1-colorT) + modernB * colorT;
+        }
+
         colorAttr.array[i*3]   = cR;
         colorAttr.array[i*3+1] = cG;
         colorAttr.array[i*3+2] = cB;
@@ -331,8 +391,19 @@
 
       // UI updates
       document.getElementById('year-label').textContent = formatYear(Math.round(year));
-      document.getElementById('legend-label').textContent =
-        '\u25CF = 50,000 people' + (ancient ? ' (estimated placement)' : '');
+      var legendEl = document.getElementById('legend-label');
+      var legendBase = '\u25CF = 50,000 people' + (ancient ? ' (estimated placement)' : '');
+      if (showAge && year >= 1950) {
+        legendEl.innerHTML = legendBase +
+          '<br><span style="color:#ff6600;">\u25CF</span><small> ~5%</small>' +
+          ' <span style="color:#ddcc00;">\u25CF</span><small> ~20%</small>' +
+          ' <span style="color:#44cc88;">\u25CF</span><small> ~30%</small>' +
+          ' <span style="color:#4488dd;">\u25CF</span><small> ~45%</small>' +
+          ' <span style="color:#8855cc;">\u25CF</span><small> ~60%</small>' +
+          ' <span style="cursor:help; opacity:0.5;" title="65\u6B73\u4EE5\u4E0A\u4EBA\u53E3\u306E\u5272\u5408">(65+ %)</span>';
+      } else {
+        legendEl.textContent = legendBase;
+      }
 
       var worldPop = getWorldPop(year);
       document.getElementById('world-pop-label').textContent =
@@ -424,6 +495,16 @@
       });
     });
     infoLabel.textContent = SCENARIOS['linear'];
+
+    // Age coloring toggle
+    var showAge = false;
+    var ageBtn = document.getElementById('age-btn');
+    ageBtn.addEventListener('click', function() {
+      showAge = !showAge;
+      ageBtn.style.color = showAge ? '#fff' : '';
+      ageBtn.style.borderBottom = showAge ? '2px solid #fff' : '';
+      updateYear(currentYear);
+    });
 
     // Rotate toggle
     var rotateBtn = document.getElementById('rotate-btn');
