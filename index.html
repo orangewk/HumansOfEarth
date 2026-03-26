@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>People of Earth — 10000 BC–2100 AD</title>
+<title>HUMANS OF EARTH — 10000 BC–2100 AD</title>
 <style>
   body { margin: 0; background: #000; color: #fff; font-family: 'Segoe UI', system-ui, sans-serif; overflow: hidden; }
   #globeViz { width: 100vw; height: 100vh; }
@@ -75,7 +75,7 @@
 <div id="globeViz"></div>
 
 <div class="overlay title-bar">
-  <h1>People of Earth</h1>
+  <h1>HUMANS OF EARTH</h1>
 </div>
 
 <div class="overlay year-display">
@@ -292,19 +292,25 @@
       var sizeAttr = geometry.getAttribute('aSize');
       var alphaAttr = geometry.getAttribute('aAlpha');
 
-      // Find closest year in data
-      var dataYears = Object.keys(allDots).map(Number).sort(function(a,b){return a-b;});
-      var bestYear = dataYears[0];
-      for (var j = 0; j < dataYears.length; j++) {
-        if (dataYears[j] >= year) {
-          bestYear = dataYears[j];
-          if (j > 0 && (year - dataYears[j-1]) < (dataYears[j] - year)) bestYear = dataYears[j-1];
-          break;
+      // Get dots for this year
+      var yearDots;
+      if (year > 2023) {
+        // Future: generate based on scenario
+        yearDots = generateFutureDots(year, currentScenario);
+      } else {
+        // Past: find closest year in pre-computed data
+        var dataYears = Object.keys(allDots).map(Number).sort(function(a,b){return a-b;});
+        var bestYear = dataYears[0];
+        for (var j = 0; j < dataYears.length; j++) {
+          if (dataYears[j] >= year) {
+            bestYear = dataYears[j];
+            if (j > 0 && (year - dataYears[j-1]) < (dataYears[j] - year)) bestYear = dataYears[j-1];
+            break;
+          }
         }
+        if (year > dataYears[dataYears.length-1]) bestYear = dataYears[dataYears.length-1];
+        yearDots = allDots[String(bestYear)] || [];
       }
-      if (year > dataYears[dataYears.length-1]) bestYear = dataYears[dataYears.length-1];
-
-      var yearDots = allDots[String(bestYear)] || [];
       var nVisible = Math.min(yearDots.length, MAX_DOTS);
 
       // Era: ancient (<1800) vs modern (>=1800)
@@ -479,7 +485,90 @@
       });
     });
 
-    // Scenario buttons (TODO: regenerate dots for different scenarios)
+    // ── Scenario-based future dot generation ──
+    var currentScenario = 'linear';
+    var N_PER_DOT = 50000;
+    var REPLACEMENT_TFR = 2.1;
+    var futureDotCache = {}; // scenario_year → dot array
+
+    // Seeded random (deterministic per country+year)
+    function seededRng(seed) {
+      return function() {
+        seed = (seed * 16807 + 0) % 2147483647;
+        return seed / 2147483647;
+      };
+    }
+
+    // Compute population for a country at a future year under a scenario
+    function computeFuturePop(m, year, scenario) {
+      var pop = m.p;
+      var tfr0 = m.t, slope = m.s, le = m.l, im = m.i;
+      var popCap = pop * 3;
+      for (var yr = 2024; yr <= year; yr++) {
+        var yearTfr;
+        if (scenario === 'stable') yearTfr = tfr0;
+        else if (scenario === 'soft') {
+          var elapsed = yr - 2023;
+          yearTfr = Math.max(0.8, tfr0 + slope * elapsed * Math.exp(-0.03 * elapsed));
+        } else yearTfr = Math.max(0, tfr0 + slope * (yr - 2023));
+        var deathRate = 1 / le;
+        var birthRate = deathRate * (yearTfr / REPLACEMENT_TFR) * (1 - im);
+        pop = pop * (1 + birthRate - deathRate);
+        pop = Math.max(0, Math.min(pop, popCap));
+      }
+      return pop;
+    }
+
+    // Get 2023 dot positions per country (from allDots['2023'] or nearest)
+    var baseDotsPerCountry = {};
+    var baseYear = allDots['2023'] || allDots['2025'] || [];
+    baseYear.forEach(function(d) {
+      var cidx = d[2];
+      if (!baseDotsPerCountry[cidx]) baseDotsPerCountry[cidx] = [];
+      baseDotsPerCountry[cidx].push([d[0], d[1]]);
+    });
+
+    function generateFutureDots(year, scenario) {
+      var cacheKey = scenario + '_' + year;
+      if (futureDotCache[cacheKey]) return futureDotCache[cacheKey];
+
+      var result = [];
+      COUNTRY_CODES.forEach(function(code, cidx) {
+        var m = modelData[code];
+        if (!m) return;
+        var pop = computeFuturePop(m, year, scenario);
+        var nDots = Math.floor(pop / N_PER_DOT);
+        if (nDots < 1) return;
+
+        // Use base dot positions as seeds
+        var baseDots = baseDotsPerCountry[cidx] || [];
+        if (baseDots.length === 0) return;
+
+        var rng = seededRng(cidx * 31337 + year);
+        // Downsample if > 50K total expected
+        var actualDots = Math.min(nDots, Math.floor(nDots / 2) + 1);
+        // Hmm, just keep it consistent with the packed data downsampling
+        if (nDots > baseDots.length * 2) {
+          actualDots = Math.min(nDots, baseDots.length * 2);
+        }
+
+        for (var i = 0; i < actualDots; i++) {
+          var base = baseDots[i % baseDots.length];
+          var dlat = (rng() - 0.5) * 1.2;
+          var dlon = (rng() - 0.5) * 1.2;
+          result.push([
+            Math.round((base[0] + dlat) * 10) / 10,
+            Math.round((base[1] + dlon) * 10) / 10,
+            cidx
+          ]);
+        }
+      });
+
+      futureDotCache[cacheKey] = result;
+      return result;
+    }
+
+    // Scenario buttons
     var infoLabel = document.getElementById('info-label');
     var SCENARIOS = {
       linear: 'TFR continues current trend to zero',
@@ -490,8 +579,10 @@
       btn.addEventListener('click', function() {
         document.querySelectorAll('.scenario-btn').forEach(function(b) { b.classList.remove('active'); });
         btn.classList.add('active');
-        infoLabel.textContent = SCENARIOS[btn.dataset.scenario];
-        // TODO: load scenario-specific dots for 2024+
+        currentScenario = btn.dataset.scenario;
+        futureDotCache = {}; // invalidate
+        infoLabel.textContent = SCENARIOS[currentScenario];
+        updateYear(currentYear);
       });
     });
     infoLabel.textContent = SCENARIOS['linear'];
