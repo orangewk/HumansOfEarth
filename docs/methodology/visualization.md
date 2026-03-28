@@ -1,10 +1,11 @@
-# Visualization — Technical Methodology
+# 可視化 — 技術的方法論
 
-> Document date: 2026-03-28
+> 作成日: 2026-03-28
+> English version: [en/visualization.md](en/visualization.md)
 
-## 1. City Light Dot Generation
+## 1. 都市光ドットの生成
 
-### 1.1 Light Pixel Extraction
+### 1.1 光ピクセル抽出
 
 NASA 夜景画像 (`earth-night.jpg`, 4096×2048 equirectangular) から都市光ピクセルを抽出。
 
@@ -20,21 +21,21 @@ brightness = (R + G + B) / 3
 
 結果: 31,089ピクセルを都市光ドットとして抽出。
 
-### 1.2 Country Assignment
+### 1.2 国割り当て
 
 GeoJSON (Natural Earth) のポリゴンで point-in-polygon 判定。Shapely STRtree で空間インデックス。
 
 - 割り当て成功: 28,387 / 31,089 (91.3%)
 - 未割り当て: 2,702 → 最寄り国に割り当て（buffer=2°で最近傍ポリゴンを探索）
 
-### 1.3 Ocean Dot Removal
+### 1.3 海上ドット除去
 
 GeoJSON 陸地ポリゴン内にないドットを除去。
 
 - 除去: 2,726ドット（漁火、油田プラットフォーム、船舶の光）
 - 残存: 39,786ドット（補正後の最終値、§1.4参照）
 
-### 1.4 Developing Country Dot Supplementation
+### 1.4 発展途上国ドット補正
 
 NASA 夜景は電力インフラに依存するため、発展途上国のドット数が人口に比して過少。
 
@@ -46,7 +47,7 @@ NASA 夜景は電力インフラに依存するため、発展途上国のドッ
 
 主な補正: IND 371→5,046 / NGA 37→799 / BGD 15→601 / ETH 13→451
 
-### 1.5 Density Normalization (countryWeight)
+### 1.5 密度正規化 (countryWeight)
 
 ドット数/人口の国間格差を補正する重み:
 
@@ -62,9 +63,9 @@ sqrt を使用して極端な値を抑制。結果例:
 
 この重みは `updateYear()` で ratio に乗算される。
 
-## 2. Rendering
+## 2. 描画
 
-### 2.1 THREE.Points + Custom ShaderMaterial
+### 2.1 THREE.Points + カスタム ShaderMaterial
 
 42K+ ドットを 1 draw call で描画。バッファに成長スロット（既存ドット数×2）を事前確保し、合計約127Kスロット。
 
@@ -101,7 +102,7 @@ void main() {
 - **depthWrite: false**: 透明オブジェクトの描画順序問題を回避
 - **gl_PointSize clamp**: 1.0〜64.0 でドライバ依存の上限を制御
 
-### 2.2 Warm Tint
+### 2.2 暖色ティント
 
 都市光ドットの色にオレンジ方向のティントを適用:
 ```javascript
@@ -112,7 +113,7 @@ B = originalB * 0.7              // B を30%カット
 
 根拠: NASA 夜景の都市光は実際にはほぼニュートラルグレー（R≈G≈B）だが、暗い地球ベースのティール背景との対比でオレンジに見える効果を意図的に強調。比較テストで `warm core+glow r=6 ×2.5` がユーザー選好（2026-03-24）。
 
-### 2.3 Dark Earth Base
+### 2.3 暗い地球ベース
 
 Blue Marble 昼画像を夜景化:
 
@@ -135,9 +136,9 @@ night[ice] *= 1.2
 - 陸地: R≈8, G≈42, B≈62
 - 海洋: R≈6, G≈32, B≈50
 
-## 3. Era-Based Visual Effects
+## 3. 時代別視覚効果
 
-### 3.1 Era Transition Variable
+### 3.1 時代遷移変数
 
 ```javascript
 if (year <= 1800) era = 0;                         // 古代: 火の光
@@ -145,7 +146,7 @@ else if (year <= 1950) era = (year - 1800) / 150;  // 過渡期: 0→1
 else era = 1;                                       // 近現代: 電気光
 ```
 
-### 3.2 Ancient Fire Light (era < 1)
+### 3.2 古代の火の光 (era < 1)
 
 色: 深い赤橙（焚火の色）
 ```javascript
@@ -161,12 +162,12 @@ color = fire * (1 - era) + electric * era
 sizeMultiplier = 1.0 + (1 - era) * 0.8  // 最大1.8倍
 ```
 
-### 3.3 Population Normalization by Era
+### 3.3 時代別人口正規化
 
 - **古代 (year < 1950)**: 相対正規化。その年の最大人口国 = ratio 1.0。べき乗カーブなし（線形スケール）
 - **近現代 (year >= 1950)**: 2023年人口比。ratio にべき乗カーブ適用
 
-### 3.4 Age Color Shift (era = 1 only)
+### 3.4 年齢色シフト (era = 1 のみ)
 
 ```javascript
 function ageColorShift(origR, origG, origB, elderlyPct) {
@@ -179,9 +180,9 @@ function ageColorShift(origR, origG, origB, elderlyPct) {
 
 結果: 若い国 → オレンジ（暖色）、高齢化した国 → 青白（寒色）
 
-## 4. Population Change Visualization
+## 4. 人口変化の視覚表現
 
-### 4.1 Decline (ratio < 1)
+### 4.1 減少 (ratio < 1)
 
 ```javascript
 brightness_factor = ratio ^ 1.5  // 急激に暗くなる
@@ -195,7 +196,7 @@ keepCount = floor(total * keepFraction)
 // dotRank < (total - keepCount) のドットは alpha=0
 ```
 
-### 4.2 Growth (ratio > 1)
+### 4.2 増加 (ratio > 1)
 
 既存ドットの明るさ・サイズを微増:
 ```javascript
@@ -211,13 +212,13 @@ nShow = floor(nSlots * growthFraction)
 
 成長ドットは既存の明るいドット（上位1/3）の近傍にランダム配置（lat/lon ±0.4°）。
 
-## 5. Historical City Dots
+## 5. 歴史都市ドット
 
-### 5.1 Data
+### 5.1 データ
 
 Reba et al. (2016) の Chandler + Modelski データを統合した1,577都市。別の `THREE.Points` として描画。
 
-### 5.2 Population → Visual Mapping
+### 5.2 人口 → 視覚マッピング
 
 ```javascript
 function getHistCityPop(pops, year)  // 最近傍の年を線形補間
@@ -230,9 +231,9 @@ size = 2.0 + norm * 5.0
 
 色は era に連動（古代: 赤橙、近代: 暖色白）。
 
-## 6. Design Decisions
+## 6. 設計判断
 
-### 6.1 Texture Baking → Realtime Dots
+### 6.1 テクスチャ焼き込み → リアルタイムドット
 
 初期実装: 人口変化を NASA 夜景画像に焼き込み、年ごとの静止画テクスチャを生成 → Globe.GL で切り替え。
 
@@ -241,13 +242,13 @@ size = 2.0 + norm * 5.0
 - シナリオ切替が不可能（事前生成が必要）
 - 年齢色変え等の属性追加が困難
 
-### 6.2 Bloom (Sharp Core + Gaussian Glow) の検討
+### 6.2 Bloom（シャープコア + ガウシアングロー）の検討
 
 静止画生成時に検討。ドットを点として打ち、ガウシアンブラーでグロー → シャープコア + グロー合成。
 
 結果: warm bloom r=6 ×2.5 がユーザー選好。ただし Globe.GL のリアルタイム描画に移行したため、ポストプロセスとしてのブルームは不採用。代わりに fragment shader の glow falloff (`smoothstep`) で擬似的にグローを表現。
 
-### 6.3 Dots: Remove → Dim
+### 6.3 ドット: 消去 → 減光
 
 初期: 人口減少で暗いドットから消去（alpha=0）。
 変更: 明るさ・サイズで連続変化（消さない）。
