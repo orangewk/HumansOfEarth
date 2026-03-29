@@ -49,4 +49,28 @@ Humans of Earth の UI がスマホ・縦長画面で使えるようにする。
 | Globe.GL のタッチ操作との干渉 | LOW | Globe.GL は OrbitControls でタッチ対応済み |
 | 設定パネルのスライドアップが複雑 | LOW | 最初は単純な全幅表示で十分 |
 
+## Globe.GL リサイズ制御（調査結果 2026-03-29）
+
+### 発見
+- Globe.GL は **auto-resize をしない**（window resize listener なし）
+- 初期化時に `window.innerWidth` / `window.innerHeight` をデフォルト取得し、以後固定
+- `world.width(n)` / `world.height(n)` で明示的にサイズ変更可能（chainable setter）
+- 内部で `renderer.setSize()` + `camera.aspect` 更新 + CSS サイズ設定を行う
+
+### 失敗した方法
+1. CSS `min-height` on body/html → Globe.GL が無視（内部で `window.innerHeight` を使用）
+2. CSS `min-height` on `#globeViz` → Globe.GL が container サイズを上書き
+3. JS で `el.style.height` を設定 → Globe.GL が独自にサイズ管理
+
+### 正解: Globe.GL の `width()` / `height()` API を使う
+```javascript
+window.addEventListener('resize', function() {
+  var w = Math.max(320, window.innerWidth);
+  var h = Math.max(500, window.innerHeight);
+  world.width(w).height(h);
+  document.body.style.overflowX = (window.innerWidth < 320) ? 'auto' : 'hidden';
+  document.body.style.overflowY = (window.innerHeight < 500) ? 'auto' : 'hidden';
+});
+```
+
 ## 複雑度: 低

@@ -6,7 +6,7 @@
 <title>HUMANS OF EARTH</title>
 <style>
   body { margin: 0; background: #000; color: #fff; font-family: 'Segoe UI', system-ui, sans-serif; overflow: hidden; }
-  #globeViz { width: 100vw; height: 100vh; }
+  #globeViz { width: 100%; height: 100%; }
 
   .overlay { position: fixed; z-index: 10; pointer-events: none; }
   .overlay > * { pointer-events: none; }
@@ -247,6 +247,18 @@
 
   var isMobile = window.innerWidth < 768;
   world.pointOfView({ lat: 20, lng: 100, altitude: isMobile ? 3.5 : 2.2 });
+
+  // Resize handler: enforce minimum dimensions via Globe.GL API
+  var MIN_W = 320, MIN_H = 500;
+  function onResize() {
+    var w = Math.max(MIN_W, window.innerWidth);
+    var h = Math.max(MIN_H, window.innerHeight);
+    world.width(w).height(h);
+    document.body.style.overflowX = (window.innerWidth < MIN_W) ? 'auto' : 'hidden';
+    document.body.style.overflowY = (window.innerHeight < MIN_H) ? 'auto' : 'hidden';
+  }
+  onResize();
+  window.addEventListener('resize', onResize);
 
   var controls = world.controls();
   if (controls) {
