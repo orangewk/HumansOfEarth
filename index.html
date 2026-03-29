@@ -3,27 +3,33 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>HUMANS OF EARTH — 10000 BC–2100 AD</title>
+<title>HUMANS OF EARTH</title>
 <style>
   body { margin: 0; background: #000; color: #fff; font-family: 'Segoe UI', system-ui, sans-serif; overflow: hidden; }
   #globeViz { width: 100vw; height: 100vh; }
 
   .overlay { position: fixed; z-index: 10; pointer-events: none; }
-  .overlay > * { pointer-events: auto; }
+  .overlay > * { pointer-events: none; }
 
   .title-bar { top: 20px; left: 0; right: 0; text-align: center; }
   .title-bar h1 { font-size: 1.2rem; font-weight: 300; letter-spacing: 0.3em; text-transform: uppercase; opacity: 0.6; }
 
-  .year-display { top: 50%; right: 40px; transform: translateY(-50%); text-align: right; }
-  .year-display .year { font-size: 5rem; font-weight: 100; line-height: 1; opacity: 0.8; font-variant-numeric: tabular-nums; }
-  .year-display .info { font-size: 0.85rem; font-weight: 300; opacity: 0.4; margin-top: 8px; }
+  .footer {
+    position: fixed; bottom: 0; left: 0; right: 0; z-index: 10;
+    background: rgba(0,0,0,0.4); backdrop-filter: blur(8px);
+    border-top: 1px solid rgba(255,255,255,0.08);
+    padding: 8px 20px 10px;
+    display: flex; flex-direction: column; align-items: center; gap: 4px;
+  }
+  .footer-top {
+    display: flex; align-items: center; gap: 12px; width: 100%; max-width: 700px;
+  }
+  .footer-top .year { font-size: 1.4rem; font-weight: 100; opacity: 0.7; font-variant-numeric: tabular-nums; white-space: nowrap; min-width: 5em; }
+  .footer-top .pop { font-size: 0.8rem; font-weight: 300; opacity: 0.4; white-space: nowrap; }
+  .footer-info { font-size: 0.6rem; font-weight: 300; opacity: 0.25; pointer-events: none; }
 
   .controls {
-    position: fixed; bottom: 40px; left: 50%; transform: translateX(-50%); z-index: 10;
-    display: flex; align-items: center; gap: 12px; flex-wrap: wrap; justify-content: center;
-    background: rgba(255,255,255,0.05); backdrop-filter: blur(10px);
-    border: 1px solid rgba(255,255,255,0.1); border-radius: 20px; padding: 10px 20px;
-    max-width: 90vw;
+    display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0;
   }
   .play-btn {
     background: none; border: 1px solid rgba(255,255,255,0.3); color: #fff;
@@ -32,7 +38,7 @@
   }
   .play-btn:hover { border-color: rgba(255,255,255,0.7); }
   input[type="range"] {
-    -webkit-appearance: none; width: 300px; height: 3px;
+    -webkit-appearance: none; flex: 1; min-width: 80px; height: 3px;
     background: rgba(255,255,255,0.15); border-radius: 2px; outline: none;
   }
   input[type="range"]::-webkit-slider-thumb {
@@ -71,6 +77,38 @@
   }
   .loading.hidden { opacity: 0; pointer-events: none; }
   .loading-text { font-size: 1rem; font-weight: 300; letter-spacing: 0.2em; opacity: 0.5; }
+
+  /* ── Mobile (<768px) ── */
+  @media (max-width: 767px) {
+    .title-bar h1 { font-size: 0.9rem; letter-spacing: 0.15em; }
+
+    .footer { padding: 6px 10px 8px; }
+    .footer-top {
+      flex-wrap: wrap; gap: 6px;
+    }
+    .footer-top .year { font-size: 1.1rem; min-width: auto; }
+    .footer-top .pop { font-size: 0.7rem; }
+
+    .controls { width: 100%; order: 10; }
+    input[type="range"] { min-width: 0; }
+
+    .play-btn { width: 44px; height: 44px; font-size: 16px; }
+
+    .settings-panel {
+      right: 10px; left: 10px; bottom: 80px;
+      border-radius: 10px;
+    }
+
+    .scenario-btn::after { display: none; }
+  }
+
+  /* ── Small mobile (<400px) ── */
+  @media (max-width: 399px) {
+    .title-bar h1 { font-size: 0.75rem; }
+    .footer-top .year { font-size: 0.95rem; }
+    .play-btn { width: 40px; height: 40px; }
+    .settings-panel { bottom: 70px; }
+  }
 </style>
 <script src="//cdn.jsdelivr.net/npm/three/build/three.min.js"></script>
 <script src="//cdn.jsdelivr.net/npm/globe.gl"></script>
@@ -84,21 +122,24 @@
 <div id="globeViz"></div>
 
 <div class="overlay title-bar">
-  <h1>HUMANS OF EARTH</h1>
+  <h1><span id="main-title">HUMANS OF EARTH</span> <span id="sub-title" style="font-size:0.65em; opacity:0.5;"></span></h1>
 </div>
 
-<div class="overlay year-display">
-  <div class="year" id="year-label">2025</div>
-  <div class="info" id="info-label"></div>
-  <div class="info" id="legend-label" style="margin-top:4px; font-size:0.7rem; line-height:1.6;"></div>
-  <div class="info" id="world-pop-label" style="font-size:0.9rem; opacity:0.6; margin-top:4px;"></div>
-</div>
-
-<div class="controls">
-  <button class="play-btn" id="play-btn" title="Play / Pause (Space)">&#9654;</button>
-  <input type="range" id="year-slider" min="0" max="100" value="0" step="1" style="flex:1; min-width:150px;">
-  <button class="play-btn" id="rotate-btn" title="Rotate (R)" style="font-size:11px;">&#x21BB;</button>
-  <button class="play-btn" id="settings-btn" title="Settings" style="font-size:13px;">&#9881;</button>
+<div class="footer">
+  <div class="footer-top">
+    <span class="year" id="year-label">2025</span>
+    <div class="controls">
+      <button class="play-btn" id="play-btn" title="Play / Pause (Space)">&#9654;</button>
+      <input type="range" id="year-slider" min="0" max="100" value="0" step="1" style="flex:1; min-width:150px;">
+      <button class="play-btn" id="rotate-btn" title="Rotate (R)" style="font-size:11px;">&#x21BB;</button>
+      <button class="play-btn" id="settings-btn" title="Settings" style="font-size:13px;">&#9881;</button>
+    </div>
+    <span class="pop" id="world-pop-label"></span>
+  </div>
+  <div class="footer-info">
+    <span id="info-label"></span>
+    <span id="legend-label" style="margin-left:8px;"></span>
+  </div>
 </div>
 
 <div id="settings-panel" class="settings-panel hidden">
@@ -135,6 +176,7 @@
   var I18N = {
     en: {
       title: 'HUMANS OF EARTH',
+      subtitle: '',
       dotLegend: '\u25CF = 50,000 people',
       dotLegendAncient: ' (estimated placement)',
       scenarioLinear: 'TFR continues current trend to zero',
@@ -154,7 +196,8 @@
       langBtn: 'JA',
     },
     ja: {
-      title: 'HUMANS OF EARTH \uFF5E\u3044\u306E\u3061\u306E\u5149\uFF5E',
+      title: 'HUMANS OF EARTH',
+      subtitle: '\u4EBA\u306E\u706F',
       dotLegend: '\u25CF = 5\u4E07\u4EBA',
       dotLegendAncient: '\uFF08\u63A8\u5B9A\u914D\u7F6E\uFF09',
       scenarioLinear: '\u51FA\u751F\u7387\u304C\u73FE\u5728\u306E\u30DA\u30FC\u30B9\u3067\u4F4E\u4E0B\u3057\u7D9A\u3051\u308B',
@@ -177,7 +220,8 @@
   var t = I18N[LANG];
 
   // Apply static text
-  document.querySelector('.title-bar h1').textContent = t.title;
+  document.getElementById('main-title').textContent = t.title;
+  document.getElementById('sub-title').textContent = t.subtitle;
   document.querySelectorAll('.settings-label').forEach(function(el, i) {
     el.textContent = [t.speed, t.scenario, t.display][i] || el.textContent;
   });
@@ -228,15 +272,25 @@
   }
 
   function formatYear(yr) {
+    if (LANG === 'ja') {
+      if (yr < 0) return '\u7D00\u5143\u524D' + Math.abs(yr) + '\u5E74'; // 紀元前X年
+      if (yr === 0) return '\u7D00\u5143\u5143\u5E74';                    // 紀元元年
+      return yr + '\u5E74';                                                // X年
+    }
     if (yr < 0) return Math.abs(yr) + ' BC';
     if (yr === 0) return '1 AD';
     return String(yr);
   }
 
   function formatPop(n) {
+    if (LANG === 'ja') {
+      if (n >= 1e8) return (n/1e8).toFixed(1) + '\u5104\u4EBA';           // 億人
+      if (n >= 1e4) return Math.round(n/1e4).toLocaleString() + '\u4E07\u4EBA'; // 万人
+      return Math.round(n) + '\u4EBA';                                      // 人
+    }
     if (n >= 1e9) return (n/1e9).toFixed(1) + ' billion';
     if (n >= 1e6) return Math.round(n/1e6) + ' million';
-    if (n >= 1e3) return Math.round(n/1e3) + ' thousand';
+    if (n >= 1e3) return Math.round(n/1e3).toLocaleString() + ' thousand';
     return String(Math.round(n));
   }
 
@@ -430,6 +484,90 @@
 
       migrationPopCache[cacheKey] = pop;
       return pop;
+    }
+
+    // Compute top migration flows for arc visualization
+    var migrationFlowCache = {};
+    function getTopFlows(year, scenario, topN) {
+      topN = topN || 20;
+      var cacheKey = scenario + '_' + year;
+      if (migrationFlowCache[cacheKey]) return migrationFlowCache[cacheKey];
+
+      // We need pop at year-1 to compute flows for this year
+      var pop = {};
+      COUNTRY_CODES.forEach(function(code) {
+        var m = modelData[code];
+        if (m) pop[code] = m.p;
+      });
+
+      var lastFlows = [];
+      for (var yr = 2024; yr <= year; yr++) {
+        var flows = [];
+        COUNTRY_CODES.forEach(function(src) {
+          var m = modelData[src];
+          if (!m || !pop[src]) return;
+          var tfr0 = m.t, slope = m.s, le = m.l, im = m.i;
+          var yearTfr;
+          if (scenario === 'stable') yearTfr = tfr0;
+          else if (scenario === 'soft') {
+            var elapsed = yr - 2023;
+            yearTfr = Math.max(0.8, tfr0 + slope * elapsed * Math.exp(-0.03 * elapsed));
+          } else yearTfr = Math.max(0, tfr0 + slope * (yr - 2023));
+
+          var deathRate = 1 / le;
+          var birthRate = deathRate * (yearTfr / 2.1) * (1 - im);
+          var newPop = pop[src] * (1 + birthRate - deathRate);
+          var surplus = Math.max(0, newPop - pop[src]);
+          var emig = surplus * EMIGRATION_RATE;
+          if (emig < 1000 || !migrationTargets[src]) return;
+
+          var targets = migrationTargets[src];
+          var totalWeight = 0;
+          var weights = [];
+          for (var i = 0; i < targets.length; i++) {
+            var dst = targets[i];
+            var gdpPC = pop[dst.code] > 0 ? getGdp(dst.code, yr) * 1e9 / pop[dst.code] : 0;
+            gdpPC = Math.min(gdpPC, 150000);
+            var w = gdpPC * dst.distWeight * dst.langBonus;
+            weights.push(w);
+            totalWeight += w;
+          }
+          if (totalWeight <= 0) return;
+
+          for (var i = 0; i < targets.length; i++) {
+            var amount = emig * (weights[i] / totalWeight);
+            if (amount > 5000) {
+              flows.push({ src: src, dst: targets[i].code, amount: amount });
+            }
+          }
+        });
+
+        // Update pop for next year
+        var naturalPop = {};
+        COUNTRY_CODES.forEach(function(code) {
+          var m = modelData[code];
+          if (!m || !pop[code]) return;
+          var tfr0 = m.t, slope = m.s, le = m.l, im = m.i;
+          var yearTfr;
+          if (scenario === 'stable') yearTfr = tfr0;
+          else if (scenario === 'soft') {
+            var elapsed = yr - 2023;
+            yearTfr = Math.max(0.8, tfr0 + slope * elapsed * Math.exp(-0.03 * elapsed));
+          } else yearTfr = Math.max(0, tfr0 + slope * (yr - 2023));
+          var deathRate = 1 / le;
+          var birthRate = deathRate * (yearTfr / 2.1) * (1 - im);
+          naturalPop[code] = Math.max(0, Math.min(pop[code] * (1 + birthRate - deathRate), m.p * 3));
+        });
+        COUNTRY_CODES.forEach(function(code) { pop[code] = naturalPop[code] || pop[code]; });
+
+        lastFlows = flows;
+      }
+
+      // Sort by amount, take top N
+      lastFlows.sort(function(a, b) { return b.amount - a.amount; });
+      var topFlows = lastFlows.slice(0, topN);
+      migrationFlowCache[cacheKey] = topFlows;
+      return topFlows;
     }
 
     // Unpack dots: "lat*10,lon*10,cidx;..." → [[lat, lon, countryIdx], ...]
@@ -638,6 +776,16 @@
           cR = stops[si][0] * (1-sf) + stops[si+1][0] * sf;
           cG = stops[si][1] * (1-sf) + stops[si+1][1] * sf;
           cB = stops[si][2] * (1-sf) + stops[si+1][2] * sf;
+          // Perceptual luminance compensation (ITU-R BT.709)
+          // Keep perceived brightness equal to the orange stop
+          var targetL = 0.2126 * stops[0][0] + 0.7152 * stops[0][1] + 0.0722 * stops[0][2]; // orange
+          var currentL = 0.2126 * cR + 0.7152 * cG + 0.0722 * cB;
+          if (currentL > 0.01) {
+            var scale = Math.min(2.0, targetL / currentL);
+            cR = Math.min(1.0, cR * scale);
+            cG = Math.min(1.0, cG * scale);
+            cB = Math.min(1.0, cB * scale);
+          }
         } else {
           cR = fireR * (1-colorT) + modernR * colorT;
           cG = fireG * (1-colorT) + modernG * colorT;
@@ -686,6 +834,41 @@
       });
       migrationBtn.style.opacity = inFuture ? '' : '0.3';
       migrationBtn.style.pointerEvents = inFuture ? '' : 'none';
+
+      // ── Migration flow arcs ──
+      if (showMigration && year > 2023) {
+        var flows = getTopFlows(year, currentScenario, 25);
+        var maxFlow = flows.length > 0 ? flows[0].amount : 1;
+        var arcsData = flows.map(function(f) {
+          var srcC = countryCoords[f.src];
+          var dstC = countryCoords[f.dst];
+          if (!srcC || !dstC) return null;
+          var norm = f.amount / maxFlow; // 0..1
+          return {
+            startLat: srcC.lat,
+            startLng: srcC.lon,
+            endLat: dstC.lat,
+            endLng: dstC.lon,
+            color: 'rgba(255, 180, 80, ' + (0.15 + norm * 0.5) + ')',
+            stroke: 0.3 + norm * 1.5,
+            dashGap: 0.5,
+            dashLength: 0.3,
+            animateTime: 3000 - norm * 2000, // faster for larger flows
+          };
+        }).filter(Boolean);
+
+        world
+          .arcsData(arcsData)
+          .arcStartLat('startLat').arcStartLng('startLng')
+          .arcEndLat('endLat').arcEndLng('endLng')
+          .arcColor('color')
+          .arcStroke('stroke')
+          .arcDashLength('dashLength')
+          .arcDashGap('dashGap')
+          .arcDashAnimateTime('animateTime');
+      } else {
+        world.arcsData([]);
+      }
     }
 
     // ── Playback controls ──
@@ -854,6 +1037,7 @@
         currentScenario = btn.dataset.scenario;
         futureDotCache = {};
         migrationPopCache = {};
+        migrationFlowCache = {};
         infoLabel.textContent = SCENARIOS[currentScenario];
         updateYear(currentYear);
       });

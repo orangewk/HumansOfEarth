@@ -1,0 +1,34 @@
+- generic [ref=e1]:
+  - generic:
+    - generic: Loading...
+  - heading "HUMANS OF EARTH ～いのちの光～" [level=1] [ref=e9]
+  - generic:
+    - generic [ref=e10]: "2025"
+    - generic [ref=e16]: 出生率が現在のペースで低下し続ける
+    - generic [ref=e17]:
+      - text: ● = 5万人
+      - text: ● ~5% ● ~20% ● ~30% ● ~45% ● ~60% (65+ %)
+  - generic [ref=e11]:
+    - button "▶" [ref=e12] [cursor=pointer]
+    - slider [ref=e13]: "266"
+    - button "回転" [ref=e14] [cursor=pointer]
+    - button "⚙" [active] [ref=e15] [cursor=pointer]
+  - generic [ref=e18]:
+    - generic [ref=e19]:
+      - generic [ref=e20]: 速度
+      - button "1x" [ref=e21] [cursor=pointer]
+      - button "3x" [ref=e22] [cursor=pointer]
+      - button "10x" [ref=e23] [cursor=pointer]
+    - generic [ref=e24]:
+      - generic [ref=e25]: シナリオ
+      - button "Linear 出生率が現在の下降ペースで続く（床=0）" [ref=e26] [cursor=pointer]
+      - button "Stable 出生率が2023年の値で固定" [ref=e27] [cursor=pointer]
+      - button "Soft 出生率の低下が緩やかになり 0.8で下げ止まる" [ref=e28] [cursor=pointer]
+    - generic [ref=e29]:
+      - generic [ref=e30]: 表示
+      - button "年齢色" [ref=e31] [cursor=pointer]
+      - button "移民フロー" [ref=e32] [cursor=pointer]
+    - generic [ref=e33]: ← → 1ステップ Space 再生/停止
+    - generic [ref=e34]:
+      - generic [ref=e35]: Lang
+      - button "EN" [ref=e36] [cursor=pointer]

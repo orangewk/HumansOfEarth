@@ -1,0 +1,3 @@
+[    2694ms] [ERROR] Failed to load resource: the server responded with a status of 404 () @ https://data.ece.iiasa.ac.at/ssp/static/Navbar/Title.css:0
+[    2711ms] [ERROR] Failed to load resource: the server responded with a status of 404 () @ https://data.ece.iiasa.ac.at/ssp/static/Landing/Landing.css:0
+[    2761ms] [ERROR] Failed to load resource: the server responded with a status of 404 () @ https://data.ece.iiasa.ac.at/ssp/static/Landing/Logos.css:0
