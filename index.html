@@ -245,20 +245,36 @@
     .atmosphereAltitude(0.12)
     .enablePointerInteraction(false);
 
-  var isMobile = window.innerWidth < 768;
-  world.pointOfView({ lat: 20, lng: 100, altitude: isMobile ? 3.5 : 2.2 });
+  world.pointOfView({ lat: 20, lng: 100, altitude: window.innerWidth < 768 ? 3.5 : 2.2 });
+
+  // Arc accessor setup (once, not per frame)
+  world
+    .arcStartLat('startLat').arcStartLng('startLng')
+    .arcEndLat('endLat').arcEndLng('endLng')
+    .arcColor('color')
+    .arcStroke('stroke')
+    .arcDashLength('dashLength')
+    .arcDashGap('dashGap')
+    .arcDashAnimateTime('animateTime');
 
   // Resize handler: enforce minimum dimensions via Globe.GL API
   var MIN_W = 320, MIN_H = 500;
+  var resizeTimer = null;
   function onResize() {
     var w = Math.max(MIN_W, window.innerWidth);
     var h = Math.max(MIN_H, window.innerHeight);
     world.width(w).height(h);
     document.body.style.overflowX = (window.innerWidth < MIN_W) ? 'auto' : 'hidden';
     document.body.style.overflowY = (window.innerHeight < MIN_H) ? 'auto' : 'hidden';
+    // Update mobile altitude on orientation change
+    var mobile = window.innerWidth < 768;
+    world.pointOfView({ altitude: mobile ? 3.5 : 2.2 });
   }
   onResize();
-  window.addEventListener('resize', onResize);
+  window.addEventListener('resize', function() {
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(onResize, 150);
+  });
 
   var controls = world.controls();
   if (controls) {
@@ -333,6 +349,16 @@
 
     var COUNTRY_CODES = packedData.countries; // index → ISO code
     console.log('Countries: ' + COUNTRY_CODES.length);
+
+    // ── Shared TFR calculation ──
+    function calcYearTfr(tfr0, slope, scenario, yr) {
+      if (scenario === 'stable') return tfr0;
+      if (scenario === 'soft') {
+        var elapsed = yr - 2023;
+        return Math.max(0.8, tfr0 + slope * elapsed * Math.exp(-0.03 * elapsed));
+      }
+      return Math.max(0, tfr0 + slope * (yr - 2023));
+    }
 
     // ── Migration engine ──
     var EMIGRATION_RATE = 0.03;
@@ -443,12 +469,7 @@
           if (!m || !pop[code]) return;
           var tfr0 = m.t, slope = m.s, le = m.l, im = m.i;
           var popCap = m.p * 3;
-          var yearTfr;
-          if (scenario === 'stable') yearTfr = tfr0;
-          else if (scenario === 'soft') {
-            var elapsed = yr - 2023;
-            yearTfr = Math.max(0.8, tfr0 + slope * elapsed * Math.exp(-0.03 * elapsed));
-          } else yearTfr = Math.max(0, tfr0 + slope * (yr - 2023));
+          var yearTfr = calcYearTfr(tfr0, slope, scenario, yr);
           var deathRate = 1 / le;
           var birthRate = deathRate * (yearTfr / 2.1) * (1 - im);
           var newPop = pop[code] * (1 + birthRate - deathRate);
@@ -497,85 +518,52 @@
     }
 
     // Compute top migration flows for arc visualization
+    // Uses computeAllFuturePop cache for consistent population data
     var migrationFlowCache = {};
     function getTopFlows(year, scenario, topN) {
-      topN = topN || 20;
+      topN = topN || 25;
       var cacheKey = scenario + '_' + year;
       if (migrationFlowCache[cacheKey]) return migrationFlowCache[cacheKey];
 
-      // We need pop at year-1 to compute flows for this year
-      var pop = {};
-      COUNTRY_CODES.forEach(function(code) {
-        var m = modelData[code];
-        if (m) pop[code] = m.p;
+      // Get population from the main migration model (cached)
+      var pop = computeAllFuturePop(year, scenario);
+
+      // Compute flows for this year only using cached pop
+      var flows = [];
+      COUNTRY_CODES.forEach(function(src) {
+        var m = modelData[src];
+        if (!m || !pop[src]) return;
+        var yearTfr = calcYearTfr(m.t, m.s, scenario, year);
+        var deathRate = 1 / m.l;
+        var birthRate = deathRate * (yearTfr / 2.1) * (1 - m.i);
+        var newPop = pop[src] * (1 + birthRate - deathRate);
+        var surplus = Math.max(0, newPop - pop[src]);
+        var emig = surplus * EMIGRATION_RATE;
+        if (emig < 1000 || !migrationTargets[src]) return;
+
+        var targets = migrationTargets[src];
+        var totalWeight = 0;
+        var weights = new Array(targets.length);
+        for (var j = 0; j < targets.length; j++) {
+          var dst = targets[j];
+          var gdpPC = pop[dst.code] > 0 ? getGdp(dst.code, year) * 1e9 / pop[dst.code] : 0;
+          gdpPC = Math.min(gdpPC, 150000);
+          var w = gdpPC * dst.distWeight * dst.langBonus;
+          weights[j] = w;
+          totalWeight += w;
+        }
+        if (totalWeight <= 0) return;
+
+        for (var j = 0; j < targets.length; j++) {
+          var amount = emig * (weights[j] / totalWeight);
+          if (amount > 5000) {
+            flows.push({ src: src, dst: targets[j].code, amount: amount });
+          }
+        }
       });
 
-      var lastFlows = [];
-      for (var yr = 2024; yr <= year; yr++) {
-        var flows = [];
-        COUNTRY_CODES.forEach(function(src) {
-          var m = modelData[src];
-          if (!m || !pop[src]) return;
-          var tfr0 = m.t, slope = m.s, le = m.l, im = m.i;
-          var yearTfr;
-          if (scenario === 'stable') yearTfr = tfr0;
-          else if (scenario === 'soft') {
-            var elapsed = yr - 2023;
-            yearTfr = Math.max(0.8, tfr0 + slope * elapsed * Math.exp(-0.03 * elapsed));
-          } else yearTfr = Math.max(0, tfr0 + slope * (yr - 2023));
-
-          var deathRate = 1 / le;
-          var birthRate = deathRate * (yearTfr / 2.1) * (1 - im);
-          var newPop = pop[src] * (1 + birthRate - deathRate);
-          var surplus = Math.max(0, newPop - pop[src]);
-          var emig = surplus * EMIGRATION_RATE;
-          if (emig < 1000 || !migrationTargets[src]) return;
-
-          var targets = migrationTargets[src];
-          var totalWeight = 0;
-          var weights = [];
-          for (var i = 0; i < targets.length; i++) {
-            var dst = targets[i];
-            var gdpPC = pop[dst.code] > 0 ? getGdp(dst.code, yr) * 1e9 / pop[dst.code] : 0;
-            gdpPC = Math.min(gdpPC, 150000);
-            var w = gdpPC * dst.distWeight * dst.langBonus;
-            weights.push(w);
-            totalWeight += w;
-          }
-          if (totalWeight <= 0) return;
-
-          for (var i = 0; i < targets.length; i++) {
-            var amount = emig * (weights[i] / totalWeight);
-            if (amount > 5000) {
-              flows.push({ src: src, dst: targets[i].code, amount: amount });
-            }
-          }
-        });
-
-        // Update pop for next year
-        var naturalPop = {};
-        COUNTRY_CODES.forEach(function(code) {
-          var m = modelData[code];
-          if (!m || !pop[code]) return;
-          var tfr0 = m.t, slope = m.s, le = m.l, im = m.i;
-          var yearTfr;
-          if (scenario === 'stable') yearTfr = tfr0;
-          else if (scenario === 'soft') {
-            var elapsed = yr - 2023;
-            yearTfr = Math.max(0.8, tfr0 + slope * elapsed * Math.exp(-0.03 * elapsed));
-          } else yearTfr = Math.max(0, tfr0 + slope * (yr - 2023));
-          var deathRate = 1 / le;
-          var birthRate = deathRate * (yearTfr / 2.1) * (1 - im);
-          naturalPop[code] = Math.max(0, Math.min(pop[code] * (1 + birthRate - deathRate), m.p * 3));
-        });
-        COUNTRY_CODES.forEach(function(code) { pop[code] = naturalPop[code] || pop[code]; });
-
-        lastFlows = flows;
-      }
-
-      // Sort by amount, take top N
-      lastFlows.sort(function(a, b) { return b.amount - a.amount; });
-      var topFlows = lastFlows.slice(0, topN);
+      flows.sort(function(a, b) { return b.amount - a.amount; });
+      var topFlows = flows.slice(0, topN);
       migrationFlowCache[cacheKey] = topFlows;
       return topFlows;
     }
@@ -771,30 +759,19 @@
         if (countryElderly && yearDots[i][2] !== undefined) {
           // Age coloring: elderly % → orange to blue-white
           var ePct = countryElderly[yearDots[i][2]] || 0;
-          // 5-stop gradient: orange → gold → emerald → blue → purple
-          var ageT = Math.min(1.0, Math.max(0, (ePct - 0.05) / 0.55)); // 5%→60%
-          var stops = [
-            [1.00, 0.40, 0.00],  // 0.0: #ff6600 orange
-            [0.87, 0.80, 0.00],  // 0.25: #ddcc00 gold
-            [0.27, 0.80, 0.53],  // 0.5: #44cc88 emerald
-            [0.27, 0.53, 0.87],  // 0.75: #4488dd blue
-            [0.53, 0.33, 0.80],  // 1.0: #8855cc purple
-          ];
-          var seg = ageT * 4; // 0..4
+          var ageT = Math.min(1.0, Math.max(0, (ePct - 0.05) / 0.55));
+          var seg = ageT * 4;
           var si = Math.min(3, Math.floor(seg));
           var sf = seg - si;
-          cR = stops[si][0] * (1-sf) + stops[si+1][0] * sf;
-          cG = stops[si][1] * (1-sf) + stops[si+1][1] * sf;
-          cB = stops[si][2] * (1-sf) + stops[si+1][2] * sf;
-          // Perceptual luminance compensation (ITU-R BT.709)
-          // Keep perceived brightness equal to the orange stop
-          var targetL = 0.2126 * stops[0][0] + 0.7152 * stops[0][1] + 0.0722 * stops[0][2]; // orange
+          cR = AGE_STOPS[si][0] * (1-sf) + AGE_STOPS[si+1][0] * sf;
+          cG = AGE_STOPS[si][1] * (1-sf) + AGE_STOPS[si+1][1] * sf;
+          cB = AGE_STOPS[si][2] * (1-sf) + AGE_STOPS[si+1][2] * sf;
           var currentL = 0.2126 * cR + 0.7152 * cG + 0.0722 * cB;
           if (currentL > 0.01) {
-            var scale = Math.min(2.0, targetL / currentL);
-            cR = Math.min(1.0, cR * scale);
-            cG = Math.min(1.0, cG * scale);
-            cB = Math.min(1.0, cB * scale);
+            var lscale = Math.min(2.0, AGE_TARGET_L / currentL);
+            cR = Math.min(1.0, cR * lscale);
+            cG = Math.min(1.0, cG * lscale);
+            cB = Math.min(1.0, cB * lscale);
           }
         } else {
           cR = fireR * (1-colorT) + modernR * colorT;
@@ -867,15 +844,7 @@
           };
         }).filter(Boolean);
 
-        world
-          .arcsData(arcsData)
-          .arcStartLat('startLat').arcStartLng('startLng')
-          .arcEndLat('endLat').arcEndLng('endLng')
-          .arcColor('color')
-          .arcStroke('stroke')
-          .arcDashLength('dashLength')
-          .arcDashGap('dashGap')
-          .arcDashAnimateTime('animateTime');
+        world.arcsData(arcsData);
       } else {
         world.arcsData([]);
       }
@@ -952,6 +921,16 @@
     var currentScenario = 'linear';
     var N_PER_DOT = 50000;
     var REPLACEMENT_TFR = 2.1;
+
+    // Age color constants (hoisted from hot loop)
+    var AGE_STOPS = [
+      [1.00, 0.40, 0.00],  // orange
+      [0.87, 0.80, 0.00],  // gold
+      [0.27, 0.80, 0.53],  // emerald
+      [0.27, 0.53, 0.87],  // blue
+      [0.53, 0.33, 0.80],  // purple
+    ];
+    var AGE_TARGET_L = 0.2126 * AGE_STOPS[0][0] + 0.7152 * AGE_STOPS[0][1] + 0.0722 * AGE_STOPS[0][2];
     var futureDotCache = {}; // scenario_year → dot array
 
     // Seeded random (deterministic per country+year)
@@ -965,17 +944,11 @@
     // Compute population for a country at a future year under a scenario
     function computeFuturePop(m, year, scenario) {
       var pop = m.p;
-      var tfr0 = m.t, slope = m.s, le = m.l, im = m.i;
       var popCap = pop * 3;
       for (var yr = 2024; yr <= year; yr++) {
-        var yearTfr;
-        if (scenario === 'stable') yearTfr = tfr0;
-        else if (scenario === 'soft') {
-          var elapsed = yr - 2023;
-          yearTfr = Math.max(0.8, tfr0 + slope * elapsed * Math.exp(-0.03 * elapsed));
-        } else yearTfr = Math.max(0, tfr0 + slope * (yr - 2023));
-        var deathRate = 1 / le;
-        var birthRate = deathRate * (yearTfr / REPLACEMENT_TFR) * (1 - im);
+        var yearTfr = calcYearTfr(m.t, m.s, scenario, yr);
+        var deathRate = 1 / m.l;
+        var birthRate = deathRate * (yearTfr / REPLACEMENT_TFR) * (1 - m.i);
         pop = pop * (1 + birthRate - deathRate);
         pop = Math.max(0, Math.min(pop, popCap));
       }
