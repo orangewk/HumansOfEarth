@@ -12,6 +12,9 @@ owid_pop.csv
 !ssp_gdp_ppp.csv
 *.gz
 
+# Playwright CLI logs
+.playwright-cli/
+
 # Intermediate/debug images
 step2_*.jpg
 compare_*.jpg
