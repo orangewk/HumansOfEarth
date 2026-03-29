@@ -84,18 +84,16 @@
 
     .footer { padding: 6px 10px 8px; }
     .footer-top {
-      flex-wrap: wrap; gap: 6px;
+      flex-wrap: nowrap; gap: 6px;
     }
-    .footer-top .year { font-size: 1.1rem; min-width: auto; }
-    .footer-top .pop { font-size: 0.7rem; }
+    .footer-top .year { font-size: 0.95rem; min-width: auto; }
+    .footer-top .pop { font-size: 0.65rem; }
+    .footer-info { font-size: 0.55rem; }
 
-    .controls { width: 100%; order: 10; }
-    input[type="range"] { min-width: 0; }
-
-    .play-btn { width: 44px; height: 44px; font-size: 16px; }
+    .play-btn { width: 32px; height: 32px; font-size: 12px; flex-shrink: 0; }
 
     .settings-panel {
-      right: 10px; left: 10px; bottom: 80px;
+      right: 10px; left: 10px; bottom: 70px;
       border-radius: 10px;
     }
 
@@ -105,9 +103,8 @@
   /* ── Small mobile (<400px) ── */
   @media (max-width: 399px) {
     .title-bar h1 { font-size: 0.75rem; }
-    .footer-top .year { font-size: 0.95rem; }
-    .play-btn { width: 40px; height: 40px; }
-    .settings-panel { bottom: 70px; }
+    .footer-top .year { font-size: 0.85rem; }
+    .play-btn { width: 28px; height: 28px; font-size: 11px; }
   }
 </style>
 <script src="//cdn.jsdelivr.net/npm/three/build/three.min.js"></script>
@@ -176,7 +173,7 @@
   var I18N = {
     en: {
       title: 'HUMANS OF EARTH',
-      subtitle: '',
+      subtitle: 'Lights of Life',
       dotLegend: '\u25CF = 50,000 people',
       dotLegendAncient: ' (estimated placement)',
       scenarioLinear: 'TFR continues current trend to zero',
@@ -248,7 +245,8 @@
     .atmosphereAltitude(0.12)
     .enablePointerInteraction(false);
 
-  world.pointOfView({ lat: 20, lng: 100, altitude: 2.2 });
+  var isMobile = window.innerWidth < 768;
+  world.pointOfView({ lat: 20, lng: 100, altitude: isMobile ? 3.5 : 2.2 });
 
   var controls = world.controls();
   if (controls) {
