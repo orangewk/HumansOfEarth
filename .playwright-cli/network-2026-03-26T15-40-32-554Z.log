@@ -1,8 +1,0 @@
-[GET] http://localhost:8080/historical_dots_packed.json => [200] OK
-[GET] http://localhost:8080/timeline.json => [200] OK
-[GET] http://localhost:8080/pop_history.json => [200] OK
-[GET] http://localhost:8080/pop_model_data.json => [200] OK
-[GET] http://localhost:8080/gdp_ssp.json => [200] OK
-[GET] http://localhost:8080/lang_groups.json => [200] OK
-[GET] http://localhost:8080/countries_coords.csv => [200] OK
-[GET] http://localhost:8080/gdp_ssp.json => [200] OK

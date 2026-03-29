@@ -1,1 +1,0 @@
-SSP Scenario Explorer and Data hosted by IIASA
