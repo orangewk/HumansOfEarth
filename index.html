@@ -322,7 +322,9 @@
 
   // ── Load data ──
   Promise.all([
-    fetch('historical_dots_packed.json').then(function(r) { return r.json(); }),
+    fetch('dots_part1.json').then(function(r) { return r.json(); }),
+    fetch('dots_part2.json').then(function(r) { return r.json(); }),
+    fetch('dots_part3.json').then(function(r) { return r.json(); }),
     fetch('timeline.json').then(function(r) { return r.json(); }),
     fetch('pop_history.json').then(function(r) { return r.json(); }),
     fetch('pop_model_data.json').then(function(r) { return r.json(); }),
@@ -330,17 +332,21 @@
     fetch('lang_groups.json').then(function(r) { return r.json(); }),
     fetch('countries_coords.csv').then(function(r) { return r.text(); })
   ]).then(function(results) {
-    var packedData = results[0]; // {countries: [...], dots: {year: "lat,lon,cidx;..."}}
-    var TIMELINE = results[1];
-    var popHistory = results[2];
+    // Merge 3 parts into packedData
+    var packedData = {
+      countries: results[0].countries,
+      dots: Object.assign({}, results[0].dots, results[1].dots, results[2].dots)
+    };
+    var TIMELINE = results[3];
+    var popHistory = results[4];
 
-    var modelData = results[3];
-    var gdpData = results[4];    // { ISO3: { "2020": val, "2025": val, ... } }
-    var langGroups = results[5]; // { "en": [...], "fr": [...], ... }
+    var modelData = results[5];
+    var gdpData = results[6];    // { ISO3: { "2020": val, "2025": val, ... } }
+    var langGroups = results[7]; // { "en": [...], "fr": [...], ... }
 
     // Parse country coords CSV → { ISO3: { lat, lon } }
     var countryCoords = {};
-    results[6].split('\n').slice(1).forEach(function(line) {
+    results[8].split('\n').slice(1).forEach(function(line) {
       var cols = line.split(',').map(function(c) { return c.trim().replace(/"/g, ''); });
       if (cols[2] && cols[4] && cols[5]) {
         countryCoords[cols[2]] = { lat: parseFloat(cols[4]), lon: parseFloat(cols[5]) };

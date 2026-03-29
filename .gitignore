@@ -12,6 +12,10 @@ owid_pop.csv
 !ssp_gdp_ppp.csv
 *.gz
 
+# Large unused data
+historical_dots.json
+historical_dots_packed.json
+
 # Playwright CLI logs
 .playwright-cli/
 
