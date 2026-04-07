@@ -107,8 +107,6 @@
     .play-btn { width: 28px; height: 28px; font-size: 11px; }
   }
 </style>
-<script src="https://cdn.jsdelivr.net/npm/three@0.149.0/build/three.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/globe.gl@0.8.5/dist/globe.gl.min.js"></script>
 </head>
 <body>
 
@@ -164,8 +162,9 @@
   </div>
 </div>
 
-<script>
-(function() {
+<script type="module">
+import * as THREE from 'https://esm.sh/three@0.183.0';
+import Globe from 'https://esm.sh/globe.gl@2.45.3?deps=three@0.183.0';
 
   // ── i18n ──
   var urlLang = new URLSearchParams(window.location.search).get('lang');
@@ -1086,8 +1085,6 @@
     console.error('Load error:', err);
     document.querySelector('.loading-text').textContent = 'Error: ' + err.message;
   });
-
-})();
 </script>
 </body>
 </html>
