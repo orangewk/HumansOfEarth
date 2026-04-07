@@ -107,8 +107,8 @@
     .play-btn { width: 28px; height: 28px; font-size: 11px; }
   }
 </style>
-<script src="https://cdn.jsdelivr.net/npm/three@0.152.2/build/three.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/globe.gl@0.8.5/dist/globe.gl.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js"></script>
+<script src="https://unpkg.com/globe.gl"></script>
 </head>
 <body>
 
@@ -298,6 +298,8 @@
   }
 
   function formatYear(yr) {
+    if (typeof yr !== 'number' || isNaN(yr)) return '—';
+    yr = Math.round(yr);
     if (LANG === 'ja') {
       if (yr < 0) return '\u7D00\u5143\u524D' + Math.abs(yr) + '\u5E74'; // 紀元前X年
       if (yr === 0) return '\u7D00\u5143\u5143\u5E74';                    // 紀元元年
